@@ -1,0 +1,39 @@
+{% extends 'base.html' %}
+{% block content %}
+
+<div class="row">
+  <div class="col-md-6">
+    <canvas id="convType"></canvas>
+  </div>
+  <div class="col-md-6">
+    <canvas id="disposition"></canvas>
+  </div>
+  <div class="col-md-12">
+    <canvas id="sentences"></canvas>
+  </div>
+</div>
+
+<!-- === Fix 3 goes below here === -->
+
+<style>
+  #convType, #disposition { height: 280px !important; }
+  #sentences { height: 320px !important; }
+</style>
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+<script type="application/json" id="chart-data">
+{
+  "convType": {{ (conv_type or {"labels": [], "data": []}) | tojson }},
+  "disp": {{ (disposition or {"labels": [], "data": []}) | tojson }},
+  "sent": {{ (sentences or {"labels": [], "total": [], "executed": [], "suspended": []}) | tojson }}
+}
+</script>
+
+<script>
+(function () {
+  const { convType, disp, sent } = JSON.parse(document.getElementById('chart-data').textContent);
+  buildCharts(convType, disp, sent);
+})();
+</script>
+{% endblock %}

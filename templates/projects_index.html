@@ -1,0 +1,58 @@
+{% extends 'base.html' %}
+{% block content %}
+
+<div class="d-flex justify-content-between align-items-center mb-3">
+  <h2 class="mb-0">NewsNowIndy Projects</h2>
+  <a class="btn btn-primary" href="{{ url_for('projects_new') }}">Add Project</a>
+</div>
+
+<div class="card">
+  <div class="card-body p-0">
+    {% if projects %}
+      <table class="table table-sm table-hover mb-0 align-middle projects-index-table">
+        <thead class="table-dark">
+          <tr>
+            <th>Project</th>
+            <th style="width:160px;">Deadline</th>
+            <th style="width:20%;">Status</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for p in projects %}
+            <tr>
+              <!-- Project -->
+              <td>
+                <a class="text-decoration-none" href="{{ url_for('project_detail', slug=p.slug) }}">
+                  {{ p.name }}
+                </a>
+              </td>
+
+              <!-- Deadline badge -->
+              <td>
+                {% set badge = p.deadline|daysleft_badge %}
+                <span class="badge {{ badge }}">
+                  {% set n = p.deadline|daysleft_num %}
+                  {{ n if n != "" else "—" }}{% if n != "" %} days{% endif %}
+                </span>
+              </td>
+
+              <!-- Status -->
+              <td>{{ p.status.value }}</td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    {% else %}
+      <div class="p-3">
+        <div class="alert alert-secondary mb-0">No projects found.</div>
+      </div>
+    {% endif %}
+  </div>
+</div>
+
+<style>
+  .projects-index-table tbody td { color: #fff !important; }
+  .projects-index-table tbody td a { color: var(--bs-link-color); }
+</style>
+
+{% endblock %}

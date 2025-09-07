@@ -1,0 +1,44 @@
+{% extends 'base.html' %}
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-3">
+  <h2 class="mb-0">Add Project</h2>
+</div>
+
+<div class="card">
+  <form method="post" action="{{ url_for('projects_create') }}">
+    <div class="card-body">
+      <div class="mb-3">
+        <label class="form-label">Project Name</label>
+        <input type="text" name="name" class="form-control" required placeholder="e.g., MCPO Plea Deals">
+      </div>
+      <form method="post" action="{{ url_for('project_update_deadline', slug=project.slug) }}" class="row g-2">
+        <div class="col-auto">
+          <label class="form-label">Deadline</label>
+          <input type="date" name="deadline" class="form-control"
+                 value="{{ project.deadline or '' }}">
+        </div>
+        <div class="col-auto align-self-end">
+          <button class="btn btn-outline-light">Save</button>
+        </div>
+      </form>
+      <div class="mb-3">
+        <label class="form-label">Slug (optional)</label>
+        <input type="text" name="slug" class="form-control" placeholder="mcpo-plea-deals">
+        <div class="form-text">If left blank, a slug will be generated from the name.</div>
+      </div>
+      <div class="mb-3">
+        <label class="form-label">Status</label>
+        <select name="status" class="form-select">
+          <option>Planned</option>
+          <option selected>Active</option>
+          <option>Completed</option>
+        </select>
+      </div>
+    </div>
+    <div class="card-footer text-end">
+      <a href="{{ url_for('projects_index') }}" class="btn btn-outline-secondary">Cancel</a>
+      <button class="btn btn-primary">Create Project</button>
+    </div>
+  </form>
+</div>
+{% endblock %}

@@ -1,0 +1,22 @@
+{% extends 'base.html' %}
+{% block content %}
+<h2>Import Court Cases</h2>
+<form method="post" enctype="multipart/form-data" class="mb-4">
+  <div class="mb-3">
+    <label class="form-label">Upload CSV</label>
+    <input type="file" name="file" accept=".csv" class="form-control" required>
+  </div>
+  <button class="btn btn-success">Upload</button>
+</form>
+<hr>
+<form method="post" action="/cases/import_gsheet" class="row g-2">
+  <div class="col-12"><b>Or import from Google Sheet</b></div>
+  <div class="col-md-8">
+    <input name="sheet_url" class="form-control" placeholder="https://docs.google.com/spreadsheets/...">
+  </div>
+  <div class="col-md-4">
+    <button class="btn btn-outline-info">Import from Sheet</button>
+  </div>
+  <p class="text-secondary mt-2">Requires service account JSON path in <code>GOOGLE_SHEETS_SERVICE_JSON</code>.</p>
+</form>
+{% endblock %}

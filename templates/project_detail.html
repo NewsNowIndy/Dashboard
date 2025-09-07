@@ -1,0 +1,231 @@
+{% extends 'base.html' %}
+{% block content %}
+
+<div class="d-flex justify-content-between align-items-center mb-3">
+  <h2 class="mb-0">
+    {{ project.name }}
+  </h2>
+  <div>
+    <b>Deadline:</b>
+    {% set badge = project.deadline|daysleft_badge %}
+    <span class="badge {{ badge }}">
+      {% set n = project.deadline|daysleft_num %}
+      {{ n if n != "" else "—" }}{% if n != "" %} days{% endif %}
+    </span>
+  </div>
+  <form method="post" action="{{ url_for('project_update_deadline', slug=project.slug) }}" class="row g-2">
+    <div class="col-auto">
+      <label class="form-label">Deadline</label>
+      <input type="date" name="deadline" class="form-control"
+            value="{{ project.deadline.strftime('%Y-%m-%d') if project.deadline else '' }}">
+    </div>
+    <div class="col-auto align-self-end">
+      <button class="btn btn-outline-light">Save</button>
+    </div>
+  </form>
+
+  <!-- Status dropdown -->
+  <form method="post" action="{{ url_for('project_update_status', slug=project.slug) }}" class="d-flex align-items-center gap-2">
+    <label for="status" class="form-label m-0">Status:</label>
+    <select class="form-select form-select-sm" id="status" name="status" onchange="this.form.submit()">
+      {% for opt in ['Planned','Active','Completed'] %}
+        <option value="{{ opt }}" {% if project.status.value == opt %}selected{% endif %}>{{ opt }}</option>
+      {% endfor %}
+    </select>
+  </form>
+</div>
+
+<!-- Notes (top) -->
+<div class="card mb-4">
+  <div class="card-header d-flex justify-content-between align-items-center">
+    <strong>Notes (Most Recent)</strong>
+    <button class="btn btn-sm btn-primary" data-bs-toggle="modal" data-bs-target="#addNoteModal">Add Note</button>
+  </div>
+  <div class="card-body p-0">
+    {% if notes %}
+      <div class="table-responsive" style="max-height: 35vh; overflow-y: auto;">
+        <table class="table table-sm table-hover mb-0 align-middle notes-table">
+          <thead class="table-dark">
+            <tr>
+              <th>Title</th>
+              <th style="width: 220px;">Date Added</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for n in notes %}
+            <tr>
+              <td>
+                <a href="#"
+                   class="text-decoration-none"
+                   data-bs-toggle="modal"
+                   data-bs-target="#viewNoteModal"
+                   data-note-title="{{ n.title|e }}"
+                   data-note-body="{{ (n.body or '')|e }}"
+                   data-note-date="{{ n.created_at|localfmt('%m-%d-%Y %H:%M') }}">
+                  {{ n.title }}
+                </a>
+              </td>
+              <td>{{ n.created_at|localfmt('%m-%d-%Y %H:%M') }}</td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    {% else %}
+      <div class="p-3">
+        <div class="alert alert-secondary mb-0">No notes yet.</div>
+      </div>
+    {% endif %}
+  </div>
+</div>
+
+<!-- Documents (existing list) -->
+<div class="card mb-4">
+  <div class="card-header"><strong>Documents</strong></div>
+  <div class="card-body p-0">
+    {% if docs %}
+      <div class="table-responsive" style="max-height: 60vh; overflow-y: auto;">
+        <table class="table table-sm table-striped table-hover mb-0 align-middle">
+          <thead class="table-dark">
+            <tr>
+              <th style="width: 40%;">Title</th>
+              <th>Notes</th>
+              <th style="width: 160px;">Uploaded</th>
+              <th style="width: 220px;" class="text-end">Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+          {% for d in docs %}
+            <tr>
+              <td>
+                <a href="{{ url_for('project_doc_download', doc_id=d.id) }}" class="text-decoration-none">
+                  {{ d.title or d.filename }}
+                </a>
+                <div class="small text-muted">
+                  {{ d.filename }}{% if d.size %} — {{ d.size }} bytes{% endif %}
+                </div>
+              </td>
+              <td>{{ d.notes or '' }}</td>
+              <td class="uploaded-cell">{{ d.uploaded_at|localfmt('%m-%d-%Y %H:%M') if d.uploaded_at else '—' }}</td>
+              <td class="text-end">
+                <a class="btn btn-sm btn-outline-info me-2" href="{{ url_for('project_doc_download', doc_id=d.id) }}">Open</a>
+                <form method="post" action="{{ url_for('project_doc_delete', doc_id=d.id) }}" style="display:inline;"
+                      onsubmit="return confirm('Delete this document? This cannot be undone.');">
+                  <button class="btn btn-sm btn-outline-danger">Delete</button>
+                </form>
+              </td>
+            </tr>
+          {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    {% else %}
+      <div class="p-3">
+        <div class="alert alert-secondary mb-0">No documents yet.</div>
+      </div>
+    {% endif %}
+  </div>
+</div>
+
+<!-- Add Note Modal -->
+<div class="modal fade" id="addNoteModal" tabindex="-1" aria-labelledby="addNoteLabel" aria-hidden="true">
+  <div class="modal-dialog">
+    <form method="post" action="{{ url_for('project_add_note', slug=project.slug) }}" class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title" id="addNoteLabel">Add Note</h5>
+        <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
+      </div>
+      <div class="modal-body">
+        <div class="mb-3">
+          <label class="form-label">Title</label>
+          <input type="text" name="title" class="form-control" required maxlength="255">
+        </div>
+        <div class="mb-3">
+          <label class="form-label">Notes</label>
+          <textarea name="body" class="form-control" rows="5" placeholder="Write your note…"></textarea>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-primary">Save Note</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<!-- View Note Modal -->
+<div class="modal fade" id="viewNoteModal" tabindex="-1" aria-labelledby="viewNoteLabel" aria-hidden="true">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title" id="viewNoteLabel">Note</h5>
+        <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
+      </div>
+      <div class="modal-body">
+        <h5 id="vn-title" class="mb-2"></h5>
+        <div id="vn-date" class="text-muted small mb-3"></div>
+        <div id="vn-body" style="white-space: pre-wrap;"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+{% if datasets and datasets|length %}
+<div class="card mt-3">
+  <div class="card-header d-flex justify-content-between align-items-center">
+    <strong>Workbench Datasets</strong>
+    <a class="btn btn-sm btn-outline-primary" href="{{ url_for('workbench_upload') }}">Upload another</a>
+  </div>
+  <div class="card-body p-0">
+    <table class="table table-sm mb-0">
+      <thead class="table-light">
+        <tr>
+          <th>Name</th>
+          <th>Uploaded</th>
+          <th>Rows Linked</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for ds in datasets %}
+        <tr>
+          <td>{{ ds.name }}</td>
+          <td>{{ ds.uploaded_at|localfmt }}</td>
+          <td>
+            {{ ds.links|length if ds.links is defined else '' }}
+          </td>
+          <td class="text-end">
+            <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('workbench_view', ds_id=ds.id) }}">Open Workbench</a>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% else %}
+<div class="alert alert-secondary mt-3">
+  No datasets linked yet. <a href="{{ url_for('workbench_upload') }}">Upload one</a> and pick “MCPO Plea Deals” as the project.
+</div>
+{% endif %}
+
+<style>
+  .uploaded-cell { color: #fff !important; }
+  .notes-table tbody td { color: #fff !important; }
+  .notes-table tbody td a { color: var(--bs-link-color); }
+</style>
+
+<script>
+  document.addEventListener('DOMContentLoaded', function () {
+    const viewNoteModal = document.getElementById('viewNoteModal');
+    if (viewNoteModal) {
+      viewNoteModal.addEventListener('show.bs.modal', function (event) {
+        const link = event.relatedTarget;
+        document.getElementById('vn-title').textContent = link.getAttribute('data-note-title') || '';
+        document.getElementById('vn-body').textContent  = link.getAttribute('data-note-body') || '';
+        document.getElementById('vn-date').textContent  = link.getAttribute('data-note-date') || '';
+      });
+    }
+  });
+</script>
+
+{% endblock %}

@@ -1,0 +1,104 @@
+{% extends 'base.html' %}
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-3">
+  <h2>Surrounding County Case Dashboard</h2>
+  <a class="btn btn-outline-light" href="{{ url_for('cases_upload') }}">Import Data</a>
+</div>
+
+<div class="row g-4">
+  <div class="col-md-6">
+    <div class="card bg-secondary-subtle text-dark p-3">
+      <h5>Plea vs Jury vs Bench (counts)</h5>
+      <canvas id="convType"></canvas>
+    </div>
+  </div>
+  <div class="col-md-6">
+    <div class="card bg-secondary-subtle text-dark p-3">
+      <h5>Disposition (Dismissed / Convicted / Pending)</h5>
+      <canvas id="disposition"></canvas>
+    </div>
+  </div>
+  <div class="col-md-12">
+    <div class="card bg-secondary-subtle text-dark p-3">
+      <h5>Sentences (total days): total vs executed vs suspended</h5>
+      <canvas id="sentences"></canvas>
+    </div>
+  </div>
+</div>
+
+<style>
+  /* Give canvases explicit heights so Chart.js doesn't grow the layout */
+  #convType, #disposition { height: 280px !important; width: 100% !important; display: block; }
+  #sentences { height: 320px !important; width: 100% !important; display: block; }
+
+  /* Ensure the card acts as a positioning container for responsive canvas */
+  .card { position: relative; }
+</style>
+
+<!-- If Chart.js is already included in base.html, REMOVE this line. Only include once. -->
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+<!-- Embed data as JSON (not parsed as JS, so no linter errors) -->
+<script type="application/json" id="chart-data">
+{
+  "convType": {{ (conv_type or {"labels": [], "data": []}) | tojson }},
+  "disp": {{ (disposition or {"labels": [], "data": []}) | tojson }},
+  "sent": {{ (sentences or {"labels": [], "total": [], "executed": [], "suspended": []}) | tojson }}
+}
+</script>
+
+<script>
+(function () {
+  // Prevent multiple initializations if your site uses Turbo/HTMX or partial reloads
+  if (window.__ccChartsInitialized) {
+    // If charts exist, tear them down to avoid stacking
+    if (window.__ccCharts) {
+      Object.values(window.__ccCharts).forEach(ch => { try { ch.destroy(); } catch(e){} });
+    }
+  }
+  window.__ccChartsInitialized = true;
+  window.__ccCharts = {};
+
+  const { convType, disp, sent } = JSON.parse(document.getElementById('chart-data').textContent);
+
+  function upsertChart(canvasId, config) {
+    const ctx = document.getElementById(canvasId).getContext('2d');
+    if (window.__ccCharts[canvasId]) {
+      try { window.__ccCharts[canvasId].destroy(); } catch (e) {}
+    }
+    window.__ccCharts[canvasId] = new Chart(ctx, config);
+  }
+
+  const commonOpts = {
+    responsive: true,
+    maintainAspectRatio: false, // respect the explicit CSS heights
+    animation: false            // optional: avoids layout jank on reloads
+  };
+
+  upsertChart('convType', {
+    type: 'bar',
+    data: { labels: convType.labels, datasets: [{ label: 'Count', data: convType.data }] },
+    options: commonOpts
+  });
+
+  upsertChart('disposition', {
+    type: 'bar',
+    data: { labels: disp.labels, datasets: [{ label: 'Count', data: disp.data }] },
+    options: commonOpts
+  });
+
+  upsertChart('sentences', {
+    type: 'bar',
+    data: {
+      labels: sent.labels,
+      datasets: [
+        { label: 'Total (days)',     data: sent.total },
+        { label: 'Executed (days)',  data: sent.executed },
+        { label: 'Suspended (days)', data: sent.suspended }
+      ]
+    },
+    options: commonOpts
+  });
+})();
+</script>
+{% endblock %}

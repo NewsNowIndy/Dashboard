@@ -1,0 +1,150 @@
+{% extends 'base.html' %}
+{% block content %}
+<h3>Request {{ r.reference_number }}</h3>
+
+<div class="row g-3">
+  <div class="col-md-8">
+
+    <!-- Agency + Notes inline editor -->
+    <div class="mb-2">
+      <p class="mb-1">
+        <b>Agency:</b> {{ r.agency or '—' }}
+        &nbsp;&nbsp;|&nbsp;&nbsp;
+        <b>Notes:</b> {{ r.snippet or '—' }}
+        <button class="btn btn-sm btn-outline-light ms-2" type="button"
+                data-bs-toggle="collapse" data-bs-target="#editMeta"
+                aria-expanded="false" aria-controls="editMeta">
+          Edit
+        </button>
+      </p>
+      <form method="post" action="{{ url_for('request_set_project', req_id=r.id) }}" class="row g-2 align-items-end mb-3">
+        <div class="col-auto">
+          <label for="project_id" class="form-label mb-0">Project</label>
+          <select name="project_id" id="project_id" class="form-select">
+            <option value="">— None —</option>
+            {% for p in eligible_projects %}
+              <option value="{{ p.id }}" {% if r.project_id == p.id %}selected{% endif %}>
+                {{ p.name }}
+              </option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="col-auto">
+          <button class="btn btn-primary">Save</button>
+        </div>
+        {% if r.project %}
+          <div class="col-12 mt-2">
+            <small class="text-muted">Current: <a href="{{ url_for('project_detail', slug=r.project.slug) }}">{{ r.project.name }}</a></small>
+          </div>
+        {% endif %}
+      </form>      
+      <div class="collapse" id="editMeta">
+        <form method="post" action="{{ url_for('update_request_meta', req_id=r.id) }}" class="row g-2 mb-3">
+          <div class="col-12 col-md-5">
+            <label class="form-label mb-1">Agency</label>
+            <input type="text" name="agency" class="form-control" placeholder="Enter agency name"
+                   value="{{ r.agency or '' }}" autocomplete="organization">
+          </div>
+          <div class="col-12 col-md-7">
+            <label class="form-label mb-1">Notes</label>
+            <textarea name="notes" class="form-control" rows="2" placeholder="Add notes...">{{ r.snippet or '' }}</textarea>
+          </div>
+          <div class="col-12">
+            <button class="btn btn-primary btn-sm mt-2">Save</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <!-- Dates (MM-DD-YYYY) -->
+    <div class="card bg-secondary-subtle text-dark mb-3">
+      <div class="card-body">
+        <h6 class="card-title">Dates</h6>
+        <form method="post" action="{{ url_for('update_request_dates', req_id=r.id) }}" class="row g-2">
+          <div class="col-12 col-md-4">
+            <label class="form-label">Requested (MM-DD-YYYY)</label>
+            <input type="text" name="requested_date" class="form-control"
+                   placeholder="MM-DD-YYYY"
+                   value="{{ r.request_date|mdy }}">
+          </div>
+          <div class="col-12 col-md-4">
+            <label class="form-label">Completed (MM-DD-YYYY)</label>
+            <input type="text" name="completed_date" class="form-control"
+                   placeholder="MM-DD-YYYY"
+                   value="{{ r.completed_date|mdy }}">
+          </div>
+          <div class="col-12 col-md-4 d-flex align-items-end">
+            <button class="btn btn-primary w-100">Save Dates</button>
+          </div>
+        </form>
+        <small class="text-muted">Tip: You can also leave a field blank to clear it.</small>
+      </div>
+    </div>
+
+    <!-- Status summary -->
+    <p class="mb-3">
+      <b>Status:</b> {{ r.status.value }}<br>
+      <b>Requested:</b> {{ r.request_date|mdy or '—' }} &nbsp;
+      <b>Completed:</b> {{ r.completed_date|mdy or '—' }}
+    </p>
+
+    <h5>Events</h5>
+    {% if r.events %}
+      <ul class="mb-4">
+        {% for e in r.events|sort(attribute='timestamp') %}
+        <li><b>{{ e.timestamp }}</b> — <code>{{ e.event_type }}</code></li>
+        {% endfor %}
+      </ul>
+    {% else %}
+      <p class="text-muted">No events recorded.</p>
+    {% endif %}
+
+    <h5>PDF Attachments</h5>
+    {% if pdf_attachments and pdf_attachments|length %}
+      <ul class="mb-4">
+        {% for a in pdf_attachments %}
+          <li>
+            {{ a.filename or 'attachment.pdf' }} ({{ a.size or 0 }} bytes)
+            {% if a.ocr_pdf_path %}
+              <a class="btn btn-sm btn-outline-info ms-2" href="{{ url_for('download_ocr', att_id=a.id) }}">Download OCR PDF</a>
+            {% endif %}
+            <a class="btn btn-sm btn-outline-light ms-1" href="{{ url_for('download_attachment', att_id=a.id) }}">
+              Download
+            </a>
+          </li>
+        {% endfor %}
+      </ul>
+    {% else %}
+      <p class="text-muted">No PDF attachments.</p>
+    {% endif %}
+
+  </div>
+
+  <div class="col-md-4">
+    <div class="card bg-secondary-subtle text-dark">
+      <div class="card-body">
+        <h6 class="card-title">Update Status</h6>
+        <form method="post" action="{{ url_for('request_status', req_id=r.id) }}" class="row g-2 align-items-end">
+          <div class="col-12">
+            <label class="form-label">Status</label>
+            <select name="status" class="form-select form-select-sm">
+              <option value="PENDING"   {{ 'selected' if r.status.name=='PENDING' }}>Pending</option>
+              <option value="COMPLETED" {{ 'selected' if r.status.name=='COMPLETED' }}>Completed</option>
+            </select>
+          </div>
+          <div class="col-12">
+            <label class="form-label">Completed (MM-DD-YYYY)</label>
+            <input type="text" name="completed_date" class="form-control form-control-sm"
+                   placeholder="MM-DD-YYYY"
+                   value="{{ r.completed_date|mdy }}">
+          </div>
+          <div class="col-12 mt-2">
+            <button class="btn btn-primary btn-sm w-100">Save Status</button>
+          </div>
+        </form>
+        <small class="text-muted">Status form also accepts MM-DD-YYYY.</small>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

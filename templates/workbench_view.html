@@ -1,0 +1,263 @@
+{% extends 'base.html' %}
+{% block content %}
+
+<div class="d-flex justify-content-between align-items-center mb-2">
+  <h3 class="mb-0">NewsNowIndy Data Workbench — {{ ds.name }}</h3>
+  <small class="text-muted">
+    Matched to cases: {{ matched }} | Links stored: {{ total }}
+  </small>
+
+  <div class="d-flex gap-2 mb-3">
+    <a class="btn btn-outline-primary"
+       href="{{ url_for('workbench_export_csv', ds_id=ds.id, group_by=group_by, metric=metric, limit=limit) }}">
+      Export Table to CSV
+    </a>
+
+    <button type="button" id="btnExportPNG" class="btn btn-outline-secondary">
+      Export Chart to PNG
+    </button>
+    <script>
+      document.getElementById("btnExportPNG")?.addEventListener("click", function () {
+        const canvas = document.getElementById("wbChart");
+        if (!canvas) return;
+        const link = document.createElement("a");
+        link.download = `workbench_{{ ds.id }}_{{ group_by }}_{{ metric }}.png`;
+        link.href = canvas.toDataURL("image/png");
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+      });
+    </script>
+  </div>
+</div>
+
+<!-- Row 1: Filters (left) + Dataset→Project (right), equal height -->
+<div class="row g-3 align-items-stretch mb-3">
+  <div class="col-lg-8 d-flex">
+    <div class="card flex-fill h-100">
+      <div class="card-body">
+        <form class="row g-3 align-items-end" method="get">
+          <div class="col-md-5">
+            <label class="form-label">Category</label>
+            <select name="group_by" class="form-select">
+              {% for c in columns %}
+                <option value="{{ c }}" {% if c == group_by %}selected{% endif %}>{{ c|pretty }}</option>
+              {% endfor %}
+            </select>
+          </div>
+
+          <div class="col-md-5">
+            <label class="form-label">Metric</label>
+            <select name="metric" class="form-select">
+              <option value="row_count" {% if metric == 'row_count' %}selected{% endif %}>{{ 'row_count'|pretty }}</option>
+              {% for c in numeric_cols %}
+                <option value="{{ c }}" {% if metric == c %}selected{% endif %}>{{ c|pretty }}</option>
+              {% endfor %}
+            </select>
+          </div>
+
+          <div class="col-md-2">
+            <label class="form-label">Top N</label>
+            <input type="number" name="limit" min="1" max="1000" value="{{ limit }}" class="form-control">
+          </div>
+
+          <div class="col-12">
+            <button class="btn btn-primary">Update</button>
+          </div>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  <div class="col-lg-4 d-flex">
+    <div class="card flex-fill h-100">
+      <div class="card-header d-flex justify-content-between align-items-center">
+        <strong>Dataset → Project</strong>
+      </div>
+      <div class="card-body">
+        {% if ds.project %}
+          <div class="mb-2">Linked to: <a href="{{ url_for('project_detail', slug=ds.project.slug) }}">{{ ds.project.name }}</a></div>
+        {% else %}
+          <div class="mb-2 text-muted">Not linked to a project.</div>
+        {% endif %}
+
+        <form method="post" action="{{ url_for('workbench_set_project', ds_id=ds.id) }}" class="d-flex gap-2">
+          <select name="project_id" class="form-select">
+            <option value="">— None —</option>
+            {% for p in eligible_projects %}
+              <option value="{{ p.id }}" {% if ds.project and ds.project.id == p.id %}selected{% endif %}>{{ p.name }}</option>
+            {% endfor %}
+          </select>
+          <button class="btn btn-outline-primary">Save</button>
+        </form>
+      </div>
+    </div>
+  </div>
+</div>
+
+<h5 class="mb-3">
+  Top {{ limit }} by <strong>{{ metric|pretty }}</strong> grouped by <strong>{{ group_by|pretty }}</strong>
+</h5>
+
+<!-- Row 2: Chart (left) + Top N + Scan (right) -->
+<div class="row g-3">
+  <div class="col-lg-8">
+    <div class="card mb-3">
+      <div class="card-body">
+        {% if labels and labels|length %}
+          <div style="position:relative; height:360px;">
+            <canvas id="wbChart" width="900" height="420" aria-label="Workbench Chart"></canvas>
+          </div>
+        {% else %}
+          <div class="text-muted">No data to chart yet.</div>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+
+  <div class="col-lg-4">
+    {% if top_rows and top_rows|length %}
+      <div class="card mb-3">
+        <div class="card-header">
+          <strong>Top {{ limit }} — {{ group_by|pretty }} / {{ metric|pretty }}</strong>
+        </div>
+        <div class="card-body p-0">
+          <div class="table-responsive">
+            <table class="table table-sm table-hover mb-0 align-middle">
+              <thead class="table-dark">
+                <tr>
+                  <th>{{ group_by|pretty }}</th>
+                  <th class="text-end">{{ metric|pretty }}</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for name, cnt in top_rows %}
+                  <tr>
+                    <td class="text-truncate" title="{{ name }}">{{ name }}</td>
+                    <td class="text-end">{{ '{:,}'.format(cnt|int) }}</td>
+                  </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    {% endif %}
+    </div>
+
+{% if pdf_totals and pdf_totals|length %}
+<div class="card mt-3">
+    <div class="card-header d-flex justify-content-between align-items-center flex-wrap gap-2">
+        <strong>
+        PDF ↔ {{ group_by|pretty }} Matches{% if ds.project %} (Project: {{ ds.project.name }}){% endif %}
+        </strong>
+
+        <div class="ms-auto d-flex align-items-center gap-2">
+        <form method="post"
+                action="{{ url_for('workbench_scan_pdfs', ds_id=ds.id, group_by=group_by, scope='project') }}"
+                class="m-0">
+            <button class="btn btn-sm btn-outline-dark"
+                    {% if not ds.project %}disabled title="Link this dataset to a project to enable project-scoped scanning."{% endif %}>
+            Scan Project PDFs for {{ group_by|pretty }}
+            </button>
+        </form>
+
+        <form method="post"
+                action="{{ url_for('workbench_scan_pdfs', ds_id=ds.id, group_by=group_by, scope='all') }}"
+                class="m-0">
+            <button class="btn btn-sm btn-outline-warning">
+            Scan <em>ALL</em> PDFs for {{ group_by|pretty }}
+            </button>
+        </form>
+        </div>
+    </div>
+  <div class="card-body p-0">
+    <div class="table-responsive">
+      <table class="table table-sm table-hover mb-0 align-middle">
+        <thead class="table-dark">
+          <tr>
+            <th>PDF Title</th>
+            <th class="text-end">Total Matches</th>
+            <th>Top Values ({{ group_by|pretty }})</th>
+            <th class="text-end">Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for doc_id, title, total in pdf_totals %}
+          <tr>
+            <td class="text-truncate" title="{{ title }}">{{ title }}</td>
+            <td class="text-end">{{ total }}</td>
+            <td>
+              {% set detail = pdf_matches.get(doc_id) %}
+              {% if detail and detail.pairs %}
+                {% for key, s in detail.pairs %}
+                  <span class="badge bg-secondary me-1 mb-1">{{ key }} ({{ s }})</span>
+                {% endfor %}
+              {% else %}
+                <span class="text-muted">—</span>
+              {% endif %}
+            </td>
+            <td class="text-end">
+              <a class="btn btn-sm btn-outline-secondary"
+                 href="{{ url_for('project_doc_download', doc_id=doc_id) }}">Download PDF</a>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+{% elif ds.project %}
+<div class="alert alert-secondary mt-3">
+  No PDF matches yet. Use the <em>Scan Project PDFs</em> or <em>Scan ALL PDFs</em> buttons above to populate this table.
+</div>
+{% endif %}
+
+{% if labels and labels|length %}
+<script>
+(function () {
+  const wbLabels = {{ labels|tojson|safe }};
+  const wbCounts = {{ counts|tojson|safe }};
+  const el = document.getElementById('wbChart');
+  if (!el) return;
+
+  const ctx = el.getContext('2d');
+  new Chart(ctx, {
+    type: 'bar',
+    data: {
+      labels: wbLabels,
+      datasets: [{
+        label: '{{ metric|pretty }}',
+        data: wbCounts
+      }]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        legend: { display: false },
+        tooltip: { intersect: false, mode: 'index' },
+        title: {
+          display: true,
+          text: 'Top {{ limit }} — {{ group_by|pretty }} / {{ metric|pretty }}'
+        }
+      },
+      scales: {
+        x: {
+          ticks: {
+            callback(v) {
+              const s = this.getLabelForValue(v) || '';
+              return s.length > 30 ? s.slice(0, 30) + '…' : s;
+            }
+          }
+        },
+        y: { beginAtZero: true }
+      }
+    }
+  });
+})();
+</script>
+{% endif %}
+
+{% endblock %}

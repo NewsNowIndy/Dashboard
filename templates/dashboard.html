@@ -1,0 +1,155 @@
+{% extends 'base.html' %}
+{% block content %}
+
+<div class="d-flex justify-content-between align-items-center mb-3">
+  <h2 class="mb-0">NewsNowIndy Dashboard</h2>
+</div>
+
+<!-- FOIA — Pending Requests -->
+<div class="card mb-4">
+  <div class="card-header">
+    <strong>FOIA — Pending Requests</strong>
+  </div>
+  <div class="card-body p-0">
+    {% if pending %}
+      <div class="table-responsive" style="max-height: 60vh; overflow-y: auto;">
+        <table class="table table-sm table-hover mb-0 align-middle foia-pending-table">
+          <thead class="table-dark">
+            <tr>
+              <th style="width: 30%;">Reference #</th>
+              <th style="width: 20%;">Status</th>
+              <th style="width: 30%;">Project</th>  <!-- NEW -->
+              <th style="width: 20%;">Requested</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for r in pending %}
+              <tr>
+                <td>
+                  <a class="text-decoration-none"
+                     href="{{ url_for('request_detail', req_id=r.id) }}">
+                    {{ r.reference_number }}
+                  </a>
+                </td>
+                <td>Pending</td>
+                <td>
+                  {% if r.project %}
+                    <a href="{{ url_for('project_detail', slug=r.project.slug) }}">{{ r.project.name }}</a>
+                  {% else %}
+                    —
+                  {% endif %}
+                </td>
+                <td>
+                    {% set badge = r.request_date|requested_age_badge %}
+                    <span class="badge {{ badge }}">{{ r.request_date|mdy or '—' }}</span>
+                </td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    {% else %}
+      <div class="p-3">
+        <div class="alert alert-secondary mb-0">No pending FOIA requests.</div>
+      </div>
+    {% endif %}
+  </div>
+</div>
+
+<style>
+  /* white text for all table cells except anchor links */
+  .foia-pending-table tbody td { color: #fff !important; }
+  .foia-pending-table tbody td a { color: var(--bs-link-color); } /* keep link color */
+</style>
+
+<!-- Active Projects -->
+<div class="card mb-4">
+  <div class="card-header">
+    <strong>Active Projects</strong>
+  </div>
+  <div class="card-body p-0">
+    {% if active_projects %}
+      <div class="table-responsive" style="max-height: 40vh; overflow-y: auto;">
+        <table class="table table-sm table-hover mb-0 align-middle projects-table">
+          <thead class="table-dark">
+            <tr>
+              <th>Project</th>
+              <th style="width:160px;">Deadline</th>
+              <th style="width: 20%;">Status</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for p in active_projects %}
+              <tr>
+                <td>
+                  <a class="text-decoration-none" href="{{ url_for('project_detail', slug=p.slug) }}">
+                    {{ p.name }}
+                  </a>
+                </td>
+                <td>
+                    {% set badge = p.deadline|daysleft_badge %}
+                    <span class="badge {{ badge }}">
+                      {% set n = p.deadline|daysleft_num %}
+                      {{ n if n != "" else "—" }}{% if n != "" %} days{% endif %}
+                    </span>
+                  </td>
+                <td>{{ p.status.value }}</td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    {% else %}
+      <div class="p-3">
+        <div class="alert alert-secondary mb-0">No active projects.</div>
+      </div>
+    {% endif %}
+  </div>
+</div>
+
+<!-- Planned Projects (separate card so it shows even if there are no active projects) -->
+<div class="card mb-4">
+  <div class="card-header"><strong>Planned Projects</strong></div>
+  <div class="card-body p-0">
+    {% if planned_projects %}
+      <div class="table-responsive" style="max-height: 40vh; overflow-y: auto;">
+        <table class="table table-sm table-hover mb-0 align-middle projects-table">
+          <thead class="table-dark">
+            <tr>
+              <th>Name</th>
+              <th style="width:160px;">Deadline</th>
+              <th style="width: 20%;">Status</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for p in planned_projects %}
+              <tr>
+                <td><a href="{{ url_for('project_detail', slug=p.slug) }}">{{ p.name }}</a></td>
+                <td>
+                    {% set badge = p.deadline|daysleft_badge %}
+                    <span class="badge {{ badge }}">
+                      {% set n = p.deadline|daysleft_num %}
+                      {{ n if n != "" else "—" }}{% if n != "" %} days{% endif %}
+                    </span>
+                  </td>
+                <td>{{ p.status.value }}</td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    {% else %}
+      <div class="p-3">
+        <div class="alert alert-secondary mb-0">No planned projects.</div>
+      </div>
+    {% endif %}
+  </div>
+</div>
+
+<style>
+  /* Keep project table text white, but links use link color */
+  .projects-table tbody td { color: #fff !important; }
+  .projects-table tbody td a { color: var(--bs-link-color); }
+</style>
+
+{% endblock %}

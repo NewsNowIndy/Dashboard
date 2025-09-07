@@ -1,0 +1,25 @@
+{% extends 'base.html' %}
+{% block content %}
+<h3>New FOIA/APRA Request</h3>
+<form method="post" class="row gy-3">
+  <div class="col-md-4">
+    <label class="form-label">Reference Number</label>
+    <input name="reference_number" class="form-control" required>
+  </div>
+  <div class="col-md-4">
+    <label class="form-label">Agency</label>
+    <input name="agency" class="form-control">
+  </div>
+  <div class="col-md-4">
+    <label class="form-label">Request Date</label>
+    <input type="date" name="request_date" class="form-control" required>
+  </div>
+  <div class="col-md-12">
+    <label class="form-label">Notes</label>
+    <textarea name="notes" class="form-control" rows="3"></textarea>
+  </div>
+  <div class="col-12">
+    <button class="btn btn-success">Save</button>
+  </div>
+</form>
+{% endblock %}

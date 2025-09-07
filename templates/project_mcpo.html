@@ -1,0 +1,250 @@
+{% extends 'base.html' %}
+{% block content %}
+
+<!-- Header with status dropdown -->
+<div class="d-flex justify-content-between align-items-center mb-3">
+  <h2 class="mb-0">
+    {{ project.name if project else 'MCPO Plea Deals' }}
+  </h2>
+  <div>
+    <a href="{{ url_for('cases_dashboard') }}" class="btn btn-outline-light me-2">Marion County Cases</a>
+    <a href="{{ url_for('surrounding_cases_dashboard') }}" class="btn btn-outline-light">Surrounding Counties</a>
+  </div>
+
+  {% if project %}
+  <form method="post" action="{{ url_for('project_mcpo_update_status') }}" class="d-flex align-items-center gap-2">
+    <label for="status" class="form-label m-0">Status:</label>
+    <select class="form-select form-select-sm" id="status" name="status" onchange="this.form.submit()">
+      {% for opt in ['Planned','Active','Completed'] %}
+        <option value="{{ opt }}" {% if project.status.value == opt %}selected{% endif %}>{{ opt }}</option>
+      {% endfor %}
+    </select>
+  </form>
+  {% endif %}
+</div>
+
+<!-- Notes (Most Recent) ABOVE Documents -->
+<div class="card mb-4">
+  <div class="card-header d-flex justify-content-between align-items-center">
+    <strong>Notes (Most Recent)</strong>
+    <button class="btn btn-sm btn-primary" data-bs-toggle="modal" data-bs-target="#addNoteModal">Add Note</button>
+  </div>
+  <div class="card-body p-0">
+    {% if notes %}
+      <div class="table-responsive" style="max-height: 35vh; overflow-y: auto;">
+        <table class="table table-sm table-hover mb-0 align-middle notes-table">
+          <thead class="table-dark">
+            <tr>
+              <th>Title</th>
+              <th style="width: 220px;">Date Added</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for n in notes %}
+            <tr>
+              <td>
+                <a href="#"
+                   class="text-decoration-none"
+                   data-bs-toggle="modal"
+                   data-bs-target="#viewNoteModal"
+                   data-note-title="{{ n.title|e }}"
+                   data-note-body="{{ (n.body or '')|e }}"
+                   data-note-date="{{ n.created_at|localfmt('%m-%d-%Y %H:%M') }}">
+                  {{ n.title }}
+                </a>
+              </td>
+              <td>{{ n.created_at|localfmt('%m-%d-%Y %H:%M') }}</td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    {% else %}
+      <div class="p-3">
+        <div class="alert alert-secondary mb-0">No notes yet.</div>
+      </div>
+    {% endif %}
+  </div>
+</div>
+
+<!-- Documents -->
+{% if docs %}
+<h3 class="mb-0">
+    Documents
+  </h3>
+<div class="table-responsive" id="docsTableWrap">  
+  <table class="table table-sm align-middle table-striped table-hover">
+    <thead>
+      <tr>
+        <th style="width: 40%;">Title</th>
+        <th>Notes</th>
+        <th style="width: 160px;">Uploaded</th>
+        <th style="width: 220px;" class="text-end">Actions</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for d in docs %}
+      <tr>
+        <td>
+          <a href="{{ url_for('project_doc_download', doc_id=d.id) }}" class="text-decoration-none">
+            {{ d.title or d.filename }}
+          </a>
+          <div class="small text-muted">
+            {{ d.filename }}{% if d.size %} — {{ d.size }} bytes{% endif %}
+          </div>
+        </td>
+
+        <!-- Inline edit for title/notes (kept as you had it) -->
+        <td>
+          <form method="post" action="{{ url_for('project_doc_update', doc_id=d.id) }}" class="row g-2">
+            <div class="col-12 mb-1">
+              <input type="text" name="title" class="form-control form-control-sm"
+                     value="{{ d.title or d.filename }}" placeholder="Title">
+            </div>
+            <div class="col-12">
+              <input type="text" name="notes" class="form-control form-control-sm"
+                     value="{{ d.notes or '' }}" placeholder="Notes…">
+            </div>
+        </td>
+
+        <td class="uploaded-cell">
+          {{ d.uploaded_at|localfmt('%m-%d-%Y %H:%M') if d.uploaded_at else '—' }}
+        </td>
+
+        <td class="text-end">
+            <a class="btn btn-sm btn-outline-info me-2" href="{{ url_for('project_doc_download', doc_id=d.id) }}">Open</a>
+            <button class="btn btn-sm btn-outline-primary me-2" type="submit">Save</button>
+          </form>
+          <form method="post" action="{{ url_for('project_doc_delete', doc_id=d.id) }}" style="display:inline;"
+                onsubmit="return confirm('Delete this document? This cannot be undone.');">
+            <button class="btn btn-sm btn-outline-danger">Delete</button>
+          </form>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% else %}
+<div class="alert alert-secondary">No documents yet. Upload your first files above.</div>
+{% endif %}
+
+<!-- Upload card (unchanged) -->
+<div class="card mb-4">
+    <div class="card-body">
+      <form method="post"
+            action="{{ url_for('project_mcpo_upload') }}"
+            enctype="multipart/form-data"
+            class="row g-2">
+        <div class="col-md-8">
+          <input type="file"
+                 name="files[]"
+                 class="form-control"
+                 required
+                 multiple
+                 accept=".pdf,.doc,.docx,.csv,.xlsx,.png,.jpg,.jpeg,.gif">
+          <small class="text-muted">You can select multiple files (Cmd/Ctrl-click).</small>
+        </div>
+        <div class="col-md-4 text-end">
+          <button class="btn btn-primary">Upload</button>
+        </div>
+        <div class="col-12">
+          <small class="text-muted">Allowed: PDF, Word (.doc/.docx), CSV, XLSX, JPG/PNG/GIF</small>
+        </div>
+      </form>
+    </div>
+</div>
+
+<!-- Styles -->
+<style>
+  /* Always white text for "Uploaded" cells */
+  .uploaded-cell { color: #fff !important; }
+
+  /* Notes table: white text except links */
+  .notes-table tbody td { color: #fff !important; }
+  .notes-table tbody td a { color: var(--bs-link-color); }
+
+  /* Docs table max-height (first ~5 visible rows), then scroll */
+  #docsTableWrap { max-height: 70vh; overflow-y: auto; }
+</style>
+
+<!-- JS to size docs table viewport -->
+<script>
+  document.addEventListener('DOMContentLoaded', function () {
+    const wrap = document.getElementById('docsTableWrap');
+    if (!wrap) return;
+
+    const table = wrap.querySelector('table');
+    const header = table.querySelector('thead');
+    const firstRow = table.querySelector('tbody tr');
+
+    if (!firstRow) return;
+
+    const rowHeight = firstRow.getBoundingClientRect().height || 48;
+    const headerHeight = header ? header.getBoundingClientRect().height : 0;
+    const rows = table.querySelectorAll('tbody tr').length;
+    const visible = Math.min(rows, 5); // show up to 5 rows without scroll
+
+    const maxH = Math.ceil(headerHeight + rowHeight * visible);
+    wrap.style.maxHeight = maxH + 'px';
+    wrap.style.overflowY = 'auto';
+  });
+</script>
+
+<!-- Add Note Modal -->
+<div class="modal fade" id="addNoteModal" tabindex="-1" aria-labelledby="addNoteLabel" aria-hidden="true">
+  <div class="modal-dialog">
+    <form method="post" action="{{ url_for('project_mcpo_add_note') }}" class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title" id="addNoteLabel">Add Note</h5>
+        <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
+      </div>
+      <div class="modal-body">
+        <div class="mb-3">
+          <label class="form-label">Title</label>
+          <input type="text" name="title" class="form-control" required maxlength="255">
+        </div>
+        <div class="mb-3">
+          <label class="form-label">Notes</label>
+          <textarea name="body" class="form-control" rows="5" placeholder="Write your note…"></textarea>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-primary">Save Note</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<!-- View Note Modal -->
+<div class="modal fade" id="viewNoteModal" tabindex="-1" aria-labelledby="viewNoteLabel" aria-hidden="true">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title" id="viewNoteLabel">Note</h5>
+        <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
+      </div>
+      <div class="modal-body">
+        <h5 id="vn-title" class="mb-2"></h5>
+        <div id="vn-date" class="text-muted small mb-3"></div>
+        <div id="vn-body" style="white-space: pre-wrap;"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+  // Populate View Note modal from data- attributes
+  document.addEventListener('DOMContentLoaded', function () {
+    const viewNoteModal = document.getElementById('viewNoteModal');
+    if (!viewNoteModal) return;
+    viewNoteModal.addEventListener('show.bs.modal', function (event) {
+      const link = event.relatedTarget;
+      document.getElementById('vn-title').textContent = link.getAttribute('data-note-title') || '';
+      document.getElementById('vn-body').textContent  = link.getAttribute('data-note-body') || '';
+      document.getElementById('vn-date').textContent  = link.getAttribute('data-note-date') || '';
+    });
+  });
+</script>
+
+{% endblock %}

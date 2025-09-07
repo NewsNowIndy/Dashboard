@@ -1,0 +1,100 @@
+{% extends 'base.html' %}
+{% set body_class = 'theme-dark' %}
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-3">
+  <h2 class="mb-0">NewsNowIndy FOIA Requests</h2>
+
+  <form class="d-flex" method="get" action="{{ url_for('home') }}">
+    <input class="form-control me-2" type="search" name="q"
+           placeholder="Search reference # (e.g., P052771-081925)"
+           value="{{ q or '' }}">
+    <button class="btn btn-outline-light">Search</button>
+  </form>
+</div>
+
+{% if rows %}
+  <div class="table-responsive">
+    <table class="table table-sm align-middle">
+      <thead>
+        <tr>
+          <th style="width: 220px;">Reference #</th>
+          <th style="width: 180px;">Agency</th>
+          <th style="width: 180px;">Project</th>
+          <th>Notes</th>
+          <th style="width: 120px;">Status</th>
+          <th style="width: 130px;">Requested</th>
+          <th style="width: 130px;">Completed</th>
+          <th style="width: 120px; text-align:right;">PDFs</th>
+          <th style="width: 150px; text-align:right;">Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for r in rows %}
+          {% set pdf_count = (pdf_counts.get(r.id) if pdf_counts is defined else 0) %}
+          <tr>
+            <td>
+              <a href="{{ url_for('request_detail', req_id=r.id) }}" class="text-decoration-none">
+                {{ r.reference_number }}
+              </a>
+            </td>
+            <td>{{ r.agency or '—' }}</td>
+
+            <!-- Project -->
+            <td>
+              {% if r.project %}
+                <a href="{{ url_for('project_detail', slug=r.project.slug) }}">{{ r.project.name }}</a>
+              {% else %}
+                —
+              {% endif %}
+            </td>
+
+            <!-- Notes -->
+            <td class="text-truncate" style="max-width: 240px;">
+              {{ r.snippet or '—' }}
+            </td>
+            <td>
+              {% if r.status.name == 'COMPLETED' %}
+                <span class="badge bg-success">Completed</span>
+              {% else %}
+                <span class="badge bg-secondary">Pending</span>
+              {% endif %}
+            </td>
+            <td>
+              {% set badge = r.request_date|requested_age_badge %}
+              <span class="badge {{ badge }}">{{ r.request_date|mdy or '—' }}</span>
+            </td>
+            <td>{{ r.completed_date|mdy or '—' }}</td>
+            <td class="text-end">
+              {% if pdf_count and pdf_count > 0 %}
+                <span class="badge bg-info text-dark">{{ pdf_count }} PDF{{ 's' if pdf_count != 1 }}</span>
+              {% else %}
+                <span class="text-muted">0</span>
+              {% endif %}
+            </td>
+            <td class="text-end">
+              <a class="btn btn-sm btn-outline-light me-1"
+                 href="{{ url_for('request_detail', req_id=r.id) }}">Open</a>
+              <form method="post" action="{{ url_for('delete_request', req_id=r.id) }}"
+                    style="display:inline;"
+                    onsubmit="return confirm('Delete request {{ r.reference_number }}? This cannot be undone.');">
+                <button class="btn btn-sm btn-outline-danger">Delete</button>
+              </form>
+            </td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+{% else %}
+  <div class="alert alert-secondary">No requests found.</div>
+{% endif %}
+{% endblock %}
+
+<script>
+if (window.Chart && Chart.defaults) {
+  Chart.defaults.color = getComputedStyle(document.querySelector('.theme-dark')||document.documentElement)
+    .getPropertyValue('--text').trim() || '#e6edf3';
+  Chart.defaults.borderColor = 'rgba(255,255,255,0.08)';
+}
+</script>
+  

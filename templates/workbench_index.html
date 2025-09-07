@@ -1,0 +1,48 @@
+{% extends 'base.html' %}
+{% block content %}
+
+<div class="d-flex justify-content-between align-items-center mb-3">
+  <h2 class="mb-0">NewsNowIndy Data Workbench</h2>
+  <a class="btn btn-primary" href="{{ url_for('workbench_upload') }}">Upload CSV</a>
+</div>
+
+<div class="card">
+    <div class="card-body p-0">
+      {% if datasets %}
+        <table class="table table-sm table-hover mb-0 align-middle">
+          <thead class="table-dark">
+            <tr>
+              <th>Name</th>
+              <th>Project</th>
+              <th>Uploaded</th>
+              <th style="width: 120px;"></th>
+            </tr>
+          </thead>
+          <tbody>
+          {% for d in datasets %}
+            <tr>
+              <td>
+                <a class="text-decoration-none" href="{{ url_for('workbench_view', ds_id=d.id) }}">{{ d.name }}</a>
+                <div class="small text-muted">{{ d.stored_path }}</div>
+              </td>
+              <td>
+                {% if d.project %}
+                  <a class="badge bg-info text-dark text-decoration-none" href="{{ url_for('project_detail', slug=d.project.slug) }}">{{ d.project.name }}</a>
+                {% else %}
+                  <span class="text-muted">—</span>
+                {% endif %}
+              </td>
+              <td>{{ d.uploaded_at|localfmt('%m-%d-%Y %H:%M') }}</td>
+              <td class="text-end">
+                <a class="btn btn-sm btn-outline-primary" href="{{ url_for('workbench_view', ds_id=d.id) }}">Open</a>
+              </td>
+            </tr>
+          {% endfor %}
+          </tbody>
+        </table>
+      {% else %}
+        <div class="p-3"><div class="alert alert-secondary mb-0">No datasets yet.</div></div>
+      {% endif %}
+    </div>
+  </div>
+  {% endblock %}

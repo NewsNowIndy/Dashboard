@@ -1,0 +1,16 @@
+Flask==3.0.3
+Flask-WTF==1.2.1
+WTForms==3.1.2
+python-dotenv==1.0.1
+SQLAlchemy==2.0.31
+alembic==1.13.2
+cryptography==43.0.0
+PyMuPDF==1.24.9
+pytesseract==0.3.13
+pdfminer.six==20231228
+ocrmypdf==16.1.0
+google-api-python-client==2.136.0
+google-auth==2.33.0
+google-auth-oauthlib==1.2.1
+python-dateutil==2.9.0.post0
+pandas==2.2.2
