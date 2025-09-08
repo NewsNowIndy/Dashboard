@@ -1334,25 +1334,36 @@ def _deliver(to_field, subject, body):
 
 @app.cli.command("send-alerts")
 @click.option("--force", is_flag=True, help="Send regardless of last_* markers / 7-day spacing.")
-@click.option("--to", "override_to", default=None, help="Override recipients (comma/semicolon separated).")
-def send_alerts(force: bool, override_to: str | None):
+@click.option("--signal-group", "signal_group", envvar="SIGNAL_GROUP_ID", default=None,
+              help="Signal V2 Group ID (or set SIGNAL_GROUP_ID env var).")
+def send_alerts(force: bool, signal_group: str | None):
+    """
+    Send project deadline and FOIA reminders ONLY to a Signal group.
+    Email delivery is intentionally removed.
+    """
     base = os.getenv("APP_BASE_URL", getattr(Config, "APP_BASE_URL", "http://localhost:5000"))
+    if not signal_group:
+        print("No Signal group provided. Use --signal-group or set SIGNAL_GROUP_ID.")
+        return
+
+    from utils_signal import send_signal_group
+
     with app.test_request_context(base_url=base):
         db = SessionLocal()
         try:
             today = today_local()
+            sent = 0
 
             # ---- Projects ----
-            sent = 0
             projects = db.query(Project).filter(Project.deadline.isnot(None)).all()
             for p in projects:
                 dleft = days_until(p.deadline)
-                due = (dleft in (21,14,7))
+                due = (dleft in (21, 14, 7))
                 if force or (due and p.last_deadline_alert != today):
                     subject = f"[FOIA Monitor] {p.name}: {dleft} days to deadline"
                     body = (f"Project: {p.name}\nDeadline: {p.deadline}\nDays left: {dleft}\n\n"
                             f"{abs_url('project_detail', slug=p.slug)}")
-                    _deliver(override_to or Config.ALERT_TO, subject, body)
+                    send_signal_group(signal_group, f"{subject}: {body}")
                     p.last_deadline_alert = today
                     sent += 1
 
@@ -1364,9 +1375,9 @@ def send_alerts(force: bool, override_to: str | None):
                 if force or due:
                     ref = r.reference_number or f"Request #{r.id}"
                     subject = f"[FOIA Monitor] Reminder: {ref} still pending"
-                    when = r.request_date and r.request_date.strftime("%m-%d-%Y") or "unknown"
+                    when = r.request_date.strftime("%m-%d-%Y") if r.request_date else "unknown"
                     body = f"{ref} is still pending.\nRequested: {when}\n\n{abs_url('request_detail', req_id=r.id)}"
-                    _deliver(override_to or Config.ALERT_TO, subject, body)
+                    send_signal_group(signal_group, f"{subject}: {body}")
                     r.last_reminder_at = today
                     sent += 1
 

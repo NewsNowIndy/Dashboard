@@ -14,7 +14,10 @@ fernet = Fernet(Config.FERNET_KEY)
 
 LOCAL_TZ = ZoneInfo("America/Indiana/Indianapolis")
 
-SMS_GATEWAY_RX = re.compile(r"^\s*(\d{10})@tmomail\.net\s*$")
+SMS_GATEWAY_RX = re.compile(
+    r"^\s*(\d{10})@(?:(?:tmomail\.net)|(?:mymetropcs\.com)|(?:vtext\.com)|(?:txt\.att\.net))\s*$",
+    re.IGNORECASE
+)
 
 def today_local() -> date:
     return datetime.now(LOCAL_TZ).date()
