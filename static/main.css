@@ -139,7 +139,7 @@
     color: var(--text);
   }
   .table thead th {
-    color: var(--text);
+    color: #FFFFFF(--text);
     border-bottom-color: var(--border);
   }
   .table tbody tr { border-color: var(--border); }

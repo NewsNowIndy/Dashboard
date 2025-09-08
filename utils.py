@@ -8,10 +8,13 @@ from datetime import date, datetime, timedelta
 import smtplib, ssl
 from email.message import EmailMessage
 from zoneinfo import ZoneInfo
+import os, re, time
 
 fernet = Fernet(Config.FERNET_KEY)
 
 LOCAL_TZ = ZoneInfo("America/Indiana/Indianapolis")
+
+SMS_GATEWAY_RX = re.compile(r"^\s*(\d{10})@tmomail\.net\s*$")
 
 def today_local() -> date:
     return datetime.now(LOCAL_TZ).date()
@@ -38,34 +41,64 @@ def badge_for_requested_age(n: int | None) -> str:
     if n > 21: return "bg-warning text-dark"
     return "bg-secondary"
 
-def send_email(cfg, to_addr: str, subject: str, body: str):
-    """
-    Minimal SMTP sender. Configure in Config:
-      MAIL_HOST, MAIL_PORT, MAIL_USERNAME, MAIL_PASSWORD, MAIL_FROM, MAIL_USE_TLS, MAIL_USE_SSL
-    """
+def _as_sms_text(subject: str, body: str) -> str:
+    # Keep it very short; avoid links and punctuation spam
+    txt = f"{subject}: {body}".strip()
+    txt = re.sub(r'https?://\S+', '', txt)
+    txt = txt.replace('\n', ' ')
+    txt = ' '.join(txt.split())
+    return txt[:150]  # a bit shorter than 160
+
+def send_email(Config, to, subject, body):
+    to = (to or "").strip()
+    if not to:
+        raise ValueError("send_email called with empty recipient")
     msg = EmailMessage()
-    msg["From"] = getattr(cfg, "MAIL_FROM", getattr(cfg, "MAIL_USERNAME", "no-reply@example"))
-    msg["To"] = to_addr
-    msg["Subject"] = subject
-    msg.set_content(body)
+    from_addr = getattr(Config, "SMTP_FROM", None) or os.getenv("SMTP_USER") or getattr(Config, "SMTP_USER", None)
+    msg["From"] = from_addr or "alerts@example.com"
+    msg["To"] = to
 
-    host = getattr(cfg, "MAIL_HOST", "smtp.gmail.com")
-    port = int(getattr(cfg, "MAIL_PORT", 587))
-    user = getattr(cfg, "MAIL_USERNAME", None)
-    pwd  = getattr(cfg, "MAIL_PASSWORD", None)
-    use_ssl = bool(getattr(cfg, "MAIL_USE_SSL", False))
-    use_tls = bool(getattr(cfg, "MAIL_USE_TLS", not use_ssl))
-
-    if use_ssl:
-        context = ssl.create_default_context()
-        with smtplib.SMTP_SSL(host, port, context=context) as s:
-            if user and pwd: s.login(user, pwd)
-            s.send_message(msg)
+    if SMS_GATEWAY_RX.match(to):
+        # SMS-safe: short, plain text, ASCII if possible
+        sms = _as_sms_text(subject, body)
+        msg["Subject"] = "ALERT"
+        try:
+            sms.encode("ascii")
+            msg.set_content(sms, subtype="plain", charset="us-ascii")
+        except UnicodeEncodeError:
+            msg.set_content(sms, subtype="plain", charset="utf-8")
     else:
-        with smtplib.SMTP(host, port) as s:
-            if use_tls: s.starttls(context=ssl.create_default_context())
-            if user and pwd: s.login(user, pwd)
+        msg["Subject"] = subject or "Alert"
+        msg.set_content(body or "")
+
+    host = os.getenv("SMTP_HOST", getattr(Config, "SMTP_HOST", "smtp.gmail.com"))
+    port = int(os.getenv("SMTP_PORT", getattr(Config, "SMTP_PORT", 587)))
+    use_tls = os.getenv("SMTP_USE_TLS", str(getattr(Config, "SMTP_USE_TLS", "1"))).lower() not in ("0","false","no")
+    user = os.getenv("SMTP_USER", getattr(Config, "SMTP_USER", None))
+    pwd  = os.getenv("SMTP_PASS", getattr(Config, "SMTP_PASS", None))
+
+    attempts = 0
+    delay = 2
+    while True:
+        attempts += 1
+        s = smtplib.SMTP(host, port, timeout=30)
+        try:
+            if use_tls:
+                s.starttls()
+            if user and pwd:
+                s.login(user, pwd)
             s.send_message(msg)
+            return True
+        except smtplib.SMTPDataError as e:
+            # 421/451 = temporary; back off and retry a few times
+            if e.smtp_code in (421, 451) and attempts < 5:
+                time.sleep(delay)
+                delay = min(delay * 2, 60)
+                continue
+            raise
+        finally:
+            try: s.quit()
+            except Exception: pass
 
 # Encrypt/decrypt small text fields
 class EncryptedBytes(TypeDecorator):

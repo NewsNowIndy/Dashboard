@@ -1,5 +1,5 @@
 from datetime import datetime, date
-from sqlalchemy import create_engine, Column, Integer, String, Date, DateTime, Enum, ForeignKey, Boolean, Text, Index, Enum as SAEnum
+from sqlalchemy import create_engine, Column, Integer, String, Date, DateTime, Enum, ForeignKey, Boolean, Text, Index, Enum as SAEnum, CheckConstraint
 from sqlalchemy.orm import declarative_base, relationship, sessionmaker
 from config import Config
 from utils import EncryptedBytes
@@ -174,6 +174,22 @@ class WorkbenchPdfLink(Base):
 
     dataset = relationship("WorkbenchDataset", backref="pdf_links")
     document = relationship("ProjectDocument")
+
+class Entity(Base):
+    __tablename__ = "entities"
+    id = Column(Integer, primary_key=True)
+    name = Column(Text, nullable=False, index=True)
+    # 'person' or 'org'
+    kind = Column(String(16), nullable=False, default="person")
+    __table_args__ = (CheckConstraint("kind in ('person','org')"),)
+
+class EntityMention(Base):
+    __tablename__ = "entity_mentions"
+    id = Column(Integer, primary_key=True)
+    entity_id = Column(Integer, ForeignKey("entities.id", ondelete="CASCADE"), nullable=False, index=True)
+    # IMPORTANT: point to project_documents
+    doc_id = Column(Integer, ForeignKey("project_documents.id", ondelete="CASCADE"), nullable=False, index=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
 
 def init_db():
     Base.metadata.create_all(engine)

@@ -14,3 +14,5 @@ google-auth==2.33.0
 google-auth-oauthlib==1.2.1
 python-dateutil==2.9.0.post0
 pandas==2.2.2
+pdfminer.six
+TESSERACT_CMD=/opt/homebrew/bin/tesseract

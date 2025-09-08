@@ -17,15 +17,21 @@ from google.auth.transport.requests import Request
 from config import Config
 from models import SessionLocal, FoiaRequest, FoiaAttachment, FoiaEvent, RequestStatus
 from utils import encrypt_file, decrypt_file_to_bytes
-from ocr_utils import make_searchable
+from ocr_utils import make_searchable  # must call ocrmypdf under the hood
 
 SCOPES = ["https://www.googleapis.com/auth/gmail.readonly"]
+
+# Adjust the pattern to match your agencies' reference numbers if needed
 REF_RE = re.compile(r"\b[A-Z]\d{6}-\d{6}\b", re.I)
 
+# Ensure storage directories exist
 os.makedirs(getattr(Config, "ATTACH_DIR", "attachments"), exist_ok=True)
 os.makedirs(getattr(Config, "OCR_CACHE", "ocr_cache"), exist_ok=True)
 
 
+# ----------------------------
+# Gmail auth/client
+# ----------------------------
 def gmail_service():
     creds = None
     if os.path.exists("token.json"):
@@ -41,14 +47,21 @@ def gmail_service():
     return build("gmail", "v1", credentials=creds)
 
 
+# ----------------------------
+# Helpers: headers, parsing
+# ----------------------------
 def _match_allowed_sender(headers: List[Dict[str, str]]) -> bool:
+    """
+    If Config.ALLOWED_SENDERS is set (list of strings),
+    only process messages where 'From' contains any of those strings.
+    """
     allowed = getattr(Config, "ALLOWED_SENDERS", None)
     if not allowed:
         return True
     from_addr = None
-    for h in headers:
-        if h.get("name", "").lower() == "from":
-            from_addr = h.get("value", "").lower()
+    for h in headers or []:
+        if (h.get("name") or "").lower() == "from":
+            from_addr = (h.get("value") or "").lower()
             break
     if not from_addr:
         return False
@@ -63,51 +76,73 @@ def parse_reference(text: Optional[str]) -> Optional[str]:
 
 
 def guess_is_ack(subject: str, body: str) -> bool:
-    s = (subject or "") + "\n" + (body or "")
+    s = ((subject or "") + "\n" + (body or "")).lower()
     keys = [
         "acknowledge", "received", "reference number",
         "your request has been received", "we have received your request",
     ]
-    ls = s.lower()
-    return any(k in ls for k in keys)
+    return any(k in s for k in keys)
 
 
 def guess_is_response(subject: str, body: str, attachments_present: bool) -> bool:
     if attachments_present:
         return True
-    s = (subject or "") + "\n" + (body or "")
+    s = ((subject or "") + "\n" + (body or "")).lower()
     keys = ["attached", "fulfill", "fulfilled", "records provided", "response to your request"]
-    ls = s.lower()
-    return any(k in ls for k in keys)
-
-
-def _decode_text_parts(payload: Dict[str, Any]) -> str:
-    """Return concatenated text & html bodies (decoded)."""
-    collected: List[str] = []
-    def walk(p: Dict[str, Any]):
-        mime = p.get("mimeType", "")
-        body = p.get("body", {}) or {}
-        data = body.get("data")
-        parts = p.get("parts", []) or []
-        if data and mime.startswith("text/"):
-            try:
-                collected.append(base64.urlsafe_b64decode(data).decode(errors="ignore"))
-            except Exception:
-                pass
-        for sp in parts:
-            walk(sp)
-    walk(payload)
-    return "\n".join(collected)
+    return any(k in s for k in keys)
 
 
 def _flatten_parts(payload: Dict[str, Any]) -> List[Dict[str, Any]]:
     out: List[Dict[str, Any]] = []
     def walk(p: Dict[str, Any]):
+        if not p:
+            return
         out.append(p)
-        for sp in p.get("parts", []) or []:
+        for sp in (p.get("parts") or []):
             walk(sp)
-    walk(payload)
+    walk(payload or {})
     return out
+
+
+def _decode_text_parts(payload: Dict[str, Any]) -> str:
+    """
+    Return concatenated decoded text/plain and text/html bodies (as text).
+    """
+    collected: List[str] = []
+    for p in _flatten_parts(payload):
+        mime = (p.get("mimeType") or "").lower()
+        body = p.get("body") or {}
+        data = body.get("data")
+        if data and mime.startswith("text/"):
+            try:
+                collected.append(base64.urlsafe_b64decode(data).decode(errors="ignore"))
+            except Exception:
+                pass
+    # Join and also include a lightly de-HTMLed version to aid reference parsing
+    text_joined = "\n".join(collected)
+    try:
+        # cheap strip of tags for reference matching
+        text_no_tags = re.sub(r"<[^>]+>", " ", text_joined)
+        return html.unescape(text_joined + "\n" + text_no_tags)
+    except Exception:
+        return text_joined
+
+
+def _extract_first_html(payload: Dict[str, Any]) -> str:
+    """
+    Return the first decoded text/html part as raw HTML string (for href scraping).
+    """
+    for p in _flatten_parts(payload):
+        mime = (p.get("mimeType") or "").lower()
+        if mime == "text/html":
+            body = p.get("body") or {}
+            data = body.get("data")
+            if data:
+                try:
+                    return base64.urlsafe_b64decode(data).decode(errors="ignore")
+                except Exception:
+                    return ""
+    return ""
 
 
 def _cap_to_today(d: date) -> date:
@@ -116,9 +151,15 @@ def _cap_to_today(d: date) -> date:
 
 
 def _parse_gmail_date(date_header_value: str) -> datetime:
+    """
+    Parse Gmail's Date header into naive local datetime.
+    Fallback to UTC now on failure.
+    """
     try:
         dt = parsedate_to_datetime(date_header_value)
-        if dt and dt.tzinfo is None:
+        if dt is None:
+            return datetime.utcnow()
+        if dt.tzinfo is None:
             return dt
         return dt.astimezone(tz=None).replace(tzinfo=None)
     except Exception:
@@ -142,9 +183,12 @@ def _get_or_create_request(db, ref: str, subject: str, snippet: str, dt: datetim
             thread_id=thread_id,
             first_message_id=msg_id,
         )
-        db.add(fr); db.flush()
+        db.add(fr)
+        db.flush()
         return fr
+
     fr = reqs[0]
+    # Merge duplicates into the first row
     if len(reqs) > 1:
         dupes = reqs[1:]
         for d in dupes:
@@ -156,6 +200,7 @@ def _get_or_create_request(db, ref: str, subject: str, snippet: str, dt: datetim
                .update({FoiaEvent.foia_request_id: fr.id}))
             db.delete(d)
         db.flush()
+
     if not fr.thread_id:
         fr.thread_id = thread_id
     if not fr.first_message_id:
@@ -165,20 +210,27 @@ def _get_or_create_request(db, ref: str, subject: str, snippet: str, dt: datetim
     return fr
 
 
-# -------- Attachments from Gmail (true MIME attachments) --------
+# ----------------------------
+# Pull actual Gmail PDF attachments
+# ----------------------------
 def _collect_pdf_blobs(payload: Dict[str, Any], svc, message_id: str) -> List[Tuple[str, bytes]]:
-    """Return (filename, raw_bytes) for real PDF attachments in Gmail payload."""
+    """
+    Return (filename, raw_bytes) for genuine PDF attachments in the Gmail payload.
+    """
     pdfs: List[Tuple[str, bytes]] = []
     for part in _flatten_parts(payload):
         body = part.get("body") or {}
         mime = (part.get("mimeType") or "").lower()
         filename = (part.get("filename") or "").strip()
+
         if not (filename.lower().endswith(".pdf") or mime == "application/pdf"):
             continue
 
-        if body.get("data"):
+        # Inline base64 data
+        data = body.get("data")
+        if data:
             try:
-                raw = base64.urlsafe_b64decode(body["data"])
+                raw = base64.urlsafe_b64decode(data)
             except Exception:
                 continue
             if not filename:
@@ -189,6 +241,7 @@ def _collect_pdf_blobs(payload: Dict[str, Any], svc, message_id: str) -> List[Tu
             pdfs.append((filename, raw))
             continue
 
+        # AttachmentId flow
         att_id = body.get("attachmentId")
         if att_id:
             att = (svc.users().messages().attachments()
@@ -208,20 +261,24 @@ def _collect_pdf_blobs(payload: Dict[str, Any], svc, message_id: str) -> List[Tu
                 filename = root + ".pdf"
             pdfs.append((filename, raw))
             continue
+
     return pdfs
 
 
-# -------- NEW: Linked PDFs through redirectors (e.g., SendGrid) --------
+# ----------------------------
+# PDFs behind links in HTML (e.g., SendGrid redirect -> portal)
+# ----------------------------
 _HREF_RE = re.compile(r'href=["\'](https?://[^"\']+)["\']', re.I)
 
 def _host_allowed(host: str) -> bool:
     host = (host or "").lower()
     allow = getattr(Config, "ALLOWED_LINK_HOSTS", None)
-    # If None or empty -> allow all (for testing)
+    # If None/empty -> allow all (useful for testing)
     if not allow:
         return True
     allow = [h.lower() for h in allow]
     return any(host == h or host.endswith("." + h) for h in allow)
+
 
 def _filename_from_response(url: str, resp: requests.Response) -> str:
     cd = resp.headers.get("Content-Disposition", "")
@@ -236,13 +293,13 @@ def _filename_from_response(url: str, resp: requests.Response) -> str:
         name = root + ".pdf"
     return name
 
-def _download_linked_pdfs_from_body(html_text: str) -> List[Tuple[str, bytes]]:
+
+def _download_linked_pdfs_from_html(html_text: str) -> List[Tuple[str, bytes]]:
     if not getattr(Config, "FETCH_LINKED_PDFS", False) or not html_text:
         return []
 
     hrefs = _HREF_RE.findall(html_text)
     if not hrefs:
-        print("[SYNC] No hrefs found in HTML.")
         return []
 
     session = requests.Session()
@@ -257,6 +314,7 @@ def _download_linked_pdfs_from_body(html_text: str) -> List[Tuple[str, bytes]]:
     for url in hrefs:
         if not url.lower().startswith("http"):
             continue
+
         try:
             r = session.get(url, timeout=30, allow_redirects=True)
         except Exception as e:
@@ -265,26 +323,29 @@ def _download_linked_pdfs_from_body(html_text: str) -> List[Tuple[str, bytes]]:
 
         final_url = r.url
         final_host = (urlparse(final_url).hostname or "").lower()
-        print(f"[SYNC] Checked link -> final_url={final_url} host={final_host} status={r.status_code} ctype={r.headers.get('Content-Type')}")
-
-        if not _host_allowed(final_host):
-            print(f"[SYNC] Skipping (host not allowed): {final_host}")
-            continue
-
         content_type = (r.headers.get("Content-Type") or "").lower()
         content = r.content or b""
+
+        print(f"[SYNC] Link: status={r.status_code} host={final_host} ctype={content_type} final={final_url}")
+
+        if not _host_allowed(final_host):
+            print(f"[SYNC] skip (host not allowed): {final_host}")
+            continue
+
         is_pdf = content_type.startswith("application/pdf") or content[:5] == b"%PDF-"
         if not is_pdf:
-            print(f"[SYNC] Skipping (not PDF): {final_url}")
             continue
 
         fname = _filename_from_response(final_url, r)
         blobs.append((fname, content))
 
-    print(f"[SYNC] Linked PDFs fetched: {len(blobs)}")
+    print(f"[SYNC] linked PDFs: {len(blobs)}")
     return blobs
 
 
+# ----------------------------
+# Main sync
+# ----------------------------
 def sync_once() -> bool:
     svc = gmail_service()
     db = SessionLocal()
@@ -308,34 +369,35 @@ def sync_once() -> bool:
             if not _match_allowed_sender(headers):
                 continue
 
-            subject = next((h["value"] for h in headers if h.get("name", "").lower() == "subject"), "")
-            date_hdr = next((h["value"] for h in headers if h.get("name", "").lower() == "date"), "")
-            try:
-                dt = _parse_gmail_date(date_hdr)
-            except Exception:
-                dt = datetime.utcnow()
-            snippet = msg.get("snippet", "")
+            subject = next((h["value"] for h in headers if (h.get("name") or "").lower() == "subject"), "") or ""
+            date_hdr = next((h["value"] for h in headers if (h.get("name") or "").lower() == "date"), "") or ""
+            dt = _parse_gmail_date(date_hdr)
+            snippet = msg.get("snippet", "") or ""
 
+            # Bodies
             body_text = _decode_text_parts(payload)
+            body_html = _extract_first_html(payload)
+
+            # Reference # (subject first, then body)
             ref = parse_reference(subject) or parse_reference(body_text)
             if not ref:
                 continue
 
-            # Real Gmail attachments
+            # Collect PDFs from Gmail + (optionally) linked in HTML
             attach_blobs = _collect_pdf_blobs(payload, svc, msg["id"])
-            # Linked PDFs via redirect (e.g., SendGrid -> portal)
-            linked_blobs = _download_linked_pdfs_from_body(body_text)
-
+            linked_blobs = _download_linked_pdfs_from_html(body_html)
             has_any_pdfs = bool(attach_blobs or linked_blobs)
+
             is_ack = guess_is_ack(subject, body_text)
             is_resp = guess_is_response(subject, body_text, attachments_present=has_any_pdfs)
 
+            # Upsert request
             fr = _get_or_create_request(
                 db, ref=ref, subject=subject, snippet=snippet, dt=dt,
                 thread_id=msg.get("threadId"), msg_id=msg.get("id")
             )
 
-            # event per message (de-duped by message_id)
+            # One event per Gmail message (dedupe by message_id)
             existing_event = (db.query(FoiaEvent)
                                 .filter(FoiaEvent.message_id == msg.get("id"))
                                 .first())
@@ -348,18 +410,20 @@ def sync_once() -> bool:
                     body=body_text[:20000],
                 ))
 
+            # Store PDF helper
             def _store_pdf(fname: str, raw_bytes: bytes):
-                safe_name = f"{msg['id']}-{fname}"
-                raw_path = os.path.join(Config.ATTACH_DIR, f"raw-{safe_name}")
-                enc_path = os.path.join(Config.ATTACH_DIR, f"{safe_name}.enc")
+                safe_base = f"{msg['id']}-{fname}"
+                raw_path = os.path.join(Config.ATTACH_DIR, f"raw-{safe_base}")
+                enc_path = os.path.join(Config.ATTACH_DIR, f"{safe_base}.enc")
 
-                # de-dupe
+                # de-dupe by final encrypted path
                 exists = (db.query(FoiaAttachment)
                             .filter(FoiaAttachment.stored_path == enc_path)
                             .first())
                 if exists:
                     return
 
+                # write temp raw, encrypt, remove raw
                 with open(raw_path, "wb") as f:
                     f.write(raw_bytes)
                 encrypt_file(raw_path, enc_path)
@@ -368,14 +432,16 @@ def sync_once() -> bool:
                 except Exception:
                     pass
 
+                # Build a searchable PDF copy for inline viewing/downloading
                 ocr_pdf_path = None
                 try:
                     import tempfile
                     with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp_in:
                         tmp_in.write(decrypt_file_to_bytes(enc_path))
                         tmp_in.flush()
-                        out_pdf = os.path.join(Config.OCR_CACHE, f"{safe_name}.pdf")
-                        if make_searchable(tmp_in.name, out_pdf):
+                        out_pdf = os.path.join(Config.OCR_CACHE, f"{safe_base}.pdf")
+                        # ocr_utils.make_searchable should call: ocrmypdf -l eng --skip-text in out
+                        if make_searchable(tmp_in.name, out_pdf, lang=getattr(Config, "OCR_LANG", "eng")):
                             ocr_pdf_path = out_pdf
                         try:
                             os.unlink(tmp_in.name)
@@ -394,11 +460,13 @@ def sync_once() -> bool:
                     is_encrypted=True,
                 ))
 
-            for fname, raw in attach_blobs + linked_blobs:
+            # Save all PDFs
+            for fname, raw in (attach_blobs + linked_blobs):
                 _store_pdf(fname, raw)
 
-            if is_resp and fr.status != RequestStatus.COMPLETE:
-                fr.status = RequestStatus.COMPLETE
+            # Status updates
+            if is_resp and fr.status != RequestStatus.COMPLETED:
+                fr.status = RequestStatus.COMPLETED
                 fr.completed_date = _cap_to_today(dt.date())
             if fr.completed_date:
                 fr.completed_date = _cap_to_today(fr.completed_date)
@@ -406,9 +474,12 @@ def sync_once() -> bool:
             db.commit()
 
         return True
+
     except HttpError as e:
-        print("Gmail API error:", e); return False
+        print("Gmail API error:", e)
+        return False
     except Exception as e:
-        print("Sync error:", e); return False
+        print("Sync error:", e)
+        return False
     finally:
         db.close()

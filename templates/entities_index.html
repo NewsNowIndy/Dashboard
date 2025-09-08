@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+{% block content %}
+<h3>Link Analysis: People / Orgs</h3>
+<div class="table-responsive">
+<table class="table table-sm align-middle">
+  <thead class="table-dark">
+    <tr><th>Name</th><th>Type</th><th class="text-end"># Docs Seen</th><th>Project(s)</th></tr>
+  </thead>
+  <tbody>
+    {% for r in rows %}
+    <tr>
+      <td><a href="{{ url_for('entities.entity_detail', entity_id=r.id) }}">{{ r.name }}</a></td>
+      <td>{{ r.kind }}</td>
+      <td class="text-end">{{ r.doc_count }}</td>
+      <td>{{ r.project_names }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+</div>
+{% endblock %}

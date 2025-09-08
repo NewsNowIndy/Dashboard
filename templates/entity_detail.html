@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+{% block content %}
+<h3>{{ ent.name }} <small class="text-muted">({{ ent.kind }})</small></h3>
+<ul class="list-group">
+  {% for d in docs %}
+  <li class="list-group-item d-flex justify-content-between align-items-center">
+    <div>
+      <div class="fw-bold">{{ d.title }}</div>
+      <div class="small text-muted">{{ d.project_name }} • {{ d.uploaded_at }}</div>
+    </div>
+    <button class="btn btn-outline-primary btn-sm"
+            onclick="openPdfModalBtn('{{ url_for('docs.inline_view', doc_id=d.id) }}')">
+      Open
+    </button>
+  </li>
+  {% endfor %}
+</ul>
+
+{% include "_pdf_modal.html" %}
+<script>
+  function openPdfModalBtn(u){
+    const viewer = "{{ url_for('static', filename='pdfjs/web/viewer.html') }}";
+    const src = viewer + "?file=" + encodeURIComponent(u) + "#pagemode=none";
+    document.getElementById('pdfFrame').src = src;
+    new bootstrap.Modal(document.getElementById('pdfModal')).show();
+  }
+</script>
+{% endblock %}

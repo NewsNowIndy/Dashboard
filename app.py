@@ -1,22 +1,47 @@
-from flask import Flask, render_template, request, redirect, url_for, send_file, flash
+from flask import Flask, render_template, request, redirect, url_for, send_file, flash, abort
 from datetime import datetime, date, timedelta
 from zoneinfo import ZoneInfo
 import io
 import os
 import re
+import tempfile
+import subprocess
+import csv
+import click
 
 from config import Config
+# app.py — REPLACE the models import with:
 from models import (
-    init_db, SessionLocal,
-    FoiaRequest, FoiaAttachment, RequestStatus, CourtCase, FoiaEvent, SurroundingCase, ProjectDocument, Project, ProjectNote, ProjectStatus,
+    init_db, SessionLocal, engine,
+    FoiaRequest, FoiaAttachment, RequestStatus, CourtCase, FoiaEvent, SurroundingCase,
+    ProjectDocument, Project, ProjectNote, ProjectStatus,
     WorkbenchDataset, WorkbenchRecordLink, WorkbenchPdfLink,
 )
-from gmail_sync import sync_once
 from utils import decrypt_file_to_bytes, normalize_request_status, days_until, age_in_days, badge_for_days_left, badge_for_requested_age, send_email
 from sheets_ingest import import_cases_from_csv, import_cases_from_gsheet, import_surrounding_cases_from_csv, import_surrounding_cases_from_gsheet
 from werkzeug.utils import secure_filename
 from werkzeug.exceptions import RequestEntityTooLarge, BadRequest, ClientDisconnected
-from sqlalchemy import func, or_, case
+from sqlalchemy import func, or_, case, text, desc
+from pdfminer.high_level import extract_text
+from routes_search import bp_search
+from routes_docs import bp_docs
+from routes_entities import bp_entities
+from routes_calendar import bp_calendar
+from scheduler import start_scheduler
+from search_text import extract_pdf_text
+from events import emit
+from urllib.parse import urljoin
+
+def ensure_fts_tables(engine):
+    with engine.begin() as conn:
+        conn.execute(text("""
+        CREATE VIRTUAL TABLE IF NOT EXISTS doc_fts USING fts5(
+          doc_id UNINDEXED,
+          title,
+          body,
+          tokenize='porter'
+        );
+        """))
 
 app = Flask(__name__)
 app.config.from_object(Config)
@@ -25,6 +50,15 @@ app.config["MAX_FORM_MEMORY_SIZE"] = 128 * 1024 * 1024     # 128 MB memory thres
 app.config["MAX_FORM_PARTS"] = 20000                       # lots of parts for multi-file uploads
 app.config["TRAP_BAD_REQUEST_ERRORS"] = True 
 init_db()
+
+app.register_blueprint(bp_search)
+app.register_blueprint(bp_docs)
+app.register_blueprint(bp_entities)
+app.register_blueprint(bp_calendar)
+
+ensure_fts_tables(engine)
+
+start_scheduler(app)
 
 # Ensure uploads dir exists
 os.makedirs("data", exist_ok=True)
@@ -39,6 +73,10 @@ UTC = ZoneInfo("UTC")
 
 def today_local():
     return datetime.now(LOCAL_TZ).date()
+
+@app.cli.command("reindex-fts")
+def reindex_fts():
+    backfill_fts(engine)
 
 @app.template_filter("pretty")
 def pretty(s: str | None):
@@ -171,6 +209,68 @@ def _is_pdf_attachment(att) -> bool:
             return True
     return False
 
+def backfill_fts(engine):
+    """
+    Insert any PDFs from project_documents into doc_fts if missing.
+    """
+    with engine.begin() as conn:
+        # Which docs are PDFs but not yet in FTS?
+        missing = list(conn.execute(text("""
+            SELECT d.id AS id,
+                   COALESCE(NULLIF(d.title,''), d.filename) AS title,
+                   d.stored_path AS path
+            FROM project_documents d
+            WHERE
+              ( (d.mime_type IS NOT NULL AND lower(d.mime_type) LIKE 'application/pdf%')
+                OR lower(d.filename) LIKE '%.pdf' )
+              AND NOT EXISTS (SELECT 1 FROM doc_fts f WHERE f.doc_id = d.id)
+        """)).mappings())
+
+        for row in missing:
+            body = ""
+            try:
+                body = extract_pdf_text(row["path"]) or ""
+            except Exception:
+                # keep going; we just skip unreadable PDFs
+                body = ""
+            conn.execute(
+                text("INSERT INTO doc_fts (doc_id, title, body) VALUES (:id, :title, :body)"),
+                {"id": row["id"], "title": row["title"] or "Untitled", "body": body}
+            )
+    print("FTS backfill complete.")
+
+def make_searchable_pdf(in_path: str, lang: str = "eng") -> str:
+    """
+    Run ocrmypdf to produce a searchable PDF. Returns path to the new file.
+    If OCR fails or ocrmypdf is missing, returns the original path.
+    """
+    try:
+        fd, out_path = tempfile.mkstemp(suffix=".pdf")
+        os.close(fd)
+        # --skip-text keeps original text layers; only OCRs image-only pages
+        subprocess.check_call(["ocrmypdf", "--skip-text", "-l", lang, in_path, out_path])
+        return out_path
+    except Exception:
+        # cleanup and fall back to original
+        try:
+            if 'out_path' in locals() and os.path.exists(out_path):
+                os.remove(out_path)
+        except Exception:
+            pass
+        return in_path
+    
+def abs_url(endpoint, **values):
+    """
+    Build absolute URLs even in CLI. If APP_BASE_URL is set (e.g. https://indyleaks.com),
+    we concatenate that with a relative url_for(). Otherwise, fall back to _external=True
+    (requires SERVER_NAME).
+    """
+    base = os.getenv("APP_BASE_URL", getattr(Config, "APP_BASE_URL", "")) or ""
+    path = url_for(endpoint, _external=False, **values)
+    if base:
+        return urljoin(base.rstrip("/") + "/", path.lstrip("/"))
+    # Fallback: this will work if SERVER_NAME is set
+    return url_for(endpoint, _external=True, **values)
 
 # -----------------------------
 # FOIA: Home / Search (sorted by Reference # desc)
@@ -209,15 +309,103 @@ def home():
     finally:
         db.close()
 
+_STOP = set("""
+the and of for from with without within to at on in a an by as or vs v jr sr ii iii iv county state city
+""".split())
+_AGENCY_HINTS = {"sheriff","police","department","office","prosecutor","county","state","city","board","court"}
+
+_NAME_RX = re.compile(r"\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+){1,3})\b")  # John Smith / John Q Public etc.
+
+def _looks_like_org(phrase: str) -> bool:
+    lw = phrase.lower()
+    return any(w in lw for w in _AGENCY_HINTS) or phrase.isupper()
+
+def _normalize_ent(s: str) -> str:
+    return " ".join(w for w in s.split() if w.lower() not in _STOP)
+
+def rebuild_entities(engine):
+    """
+    Naive entity pass: pulls person-like names (Proper Case) and org-like phrases
+    from FTS body text and writes to entities/entity_mentions.
+    """
+    with engine.begin() as conn:
+        # ensure tables exist
+        conn.execute(text("CREATE TABLE IF NOT EXISTS entities (id INTEGER PRIMARY KEY, name TEXT NOT NULL, kind TEXT NOT NULL)"))
+        conn.execute(text("CREATE TABLE IF NOT EXISTS entity_mentions (id INTEGER PRIMARY KEY, entity_id INTEGER NOT NULL, doc_id INTEGER NOT NULL, created_at TEXT)"))
+
+        # optional: clear existing data
+        conn.execute(text("DELETE FROM entity_mentions"))
+        conn.execute(text("DELETE FROM entities"))
+
+        docs = list(conn.execute(text("""
+            SELECT d.id AS doc_id,
+                   d.title AS title,
+                   f.body AS body
+            FROM doc_fts f
+            JOIN project_documents d ON d.id = f.doc_id
+        """)).mappings())
+
+        # de-dup in-memory
+        ent_to_id = {}
+
+        def _get_or_create(name, kind):
+            key = (name.lower(), kind)
+            if key in ent_to_id:
+                return ent_to_id[key]
+            row = conn.execute(
+                text("INSERT INTO entities (name, kind) VALUES (:n, :k)"),
+                {"n": name, "k": kind}
+            )
+            # sqlite3 doesn't return lastrowid through SQLAlchemy Core in all versions; fetch back:
+            eid = conn.execute(text("SELECT last_insert_rowid()")).scalar()
+            ent_to_id[key] = eid
+            return eid
+
+        for r in docs:
+            text_blob = (r["body"] or "") + " " + (r["title"] or "")
+            # Persons: Proper-Case sequences
+            for m in _NAME_RX.finditer(text_blob):
+                cand = _normalize_ent(m.group(1)).strip()
+                if not cand or any(x in cand for x in ("Page", "Exhibit")):
+                    continue
+                if len(cand) < 5:
+                    continue
+                eid = _get_or_create(cand, "person")
+                conn.execute(text("""
+                    INSERT INTO entity_mentions (entity_id, doc_id, created_at)
+                    VALUES (:e, :d, :ts)
+                """), {"e": eid, "d": r["doc_id"], "ts": datetime.utcnow().isoformat()})
+
+            # Orgs: dumb heuristics - all-caps words >= 2 tokens, or has agency hints
+            words = re.findall(r"[A-Za-z][A-Za-z&\.\-]+(?:\s+[A-Za-z&\.\-]+){1,4}", text_blob)
+            for phrase in words:
+                pr = phrase.strip()
+                if len(pr) < 6:
+                    continue
+                if _looks_like_org(pr):
+                    nm = _normalize_ent(pr).strip()
+                    if not nm or nm.count(" ") == 0:
+                        continue
+                    eid = _get_or_create(nm, "org")
+                    conn.execute(text("""
+                        INSERT INTO entity_mentions (entity_id, doc_id, created_at)
+                        VALUES (:e, :d, :ts)
+                    """), {"e": eid, "d": r["doc_id"], "ts": datetime.utcnow().isoformat()})
+    print("Entities rebuilt.")
+
 # -----------------------------
 # FOIA: Gmail sync
 # -----------------------------
 @app.route("/sync")
 def sync():
+    try:
+        from gmail_sync import sync_once
+    except Exception as e:
+        flash(f"Gmail sync unavailable: {e}")
+        return redirect(url_for("home"))
     ok = sync_once()
     flash("Sync complete" if ok else "Sync failed — check logs")
     return redirect(url_for("home"))
-
 
 # -----------------------------
 # FOIA: Create new manual request
@@ -308,17 +496,28 @@ def request_set_project(req_id):
 def request_status(req_id):
     db = SessionLocal()
     try:
-        r = db.get(FoiaRequest, req_id)  # <-- modern API
+        r = db.get(FoiaRequest, req_id)
         if not r:
             flash("Request not found.")
             return redirect(url_for("home"))
 
+        old = r.status  # capture before change
+
         status_token = normalize_request_status(request.form.get("status", "Pending"))  # 'PENDING'/'COMPLETED'
-        r.status = RequestStatus[status_token]  # <-- by NAME
+        new_status = RequestStatus[status_token]
+        r.status = new_status
 
         cd = request.form.get("completed_date")
         r.completed_date = _parse_date_any(cd)
+
         db.commit()
+
+        if old != new_status:
+            try:
+                emit("foia.status_changed", foia_request_id=r.id, old=old.value, new=new_status.value)
+            except Exception:
+                app.logger.exception("emit(foia.status_changed) failed for foia_request_id=%s", r.id)
+
         return redirect(url_for("request_detail", req_id=req_id))
     finally:
         db.close()
@@ -393,7 +592,7 @@ def request_delete(req_id):
 def download_attachment(att_id):
     db = SessionLocal()
     try:
-        a = db.query(FoiaAttachment, att_id)
+        a = db.get(FoiaAttachment, att_id)
         if not a:
             flash("Attachment not found.")
             return redirect(url_for("home"))
@@ -412,11 +611,24 @@ def download_attachment(att_id):
 def download_ocr(att_id):
     db = SessionLocal()
     try:
-        a = db.query(FoiaAttachment, att_id)
-        if not a or not a.ocr_pdf_path or not os.path.exists(a.ocr_pdf_path):
-            flash("No OCR copy available")
-            return redirect(url_for("request_detail", req_id=a.foia_request_id if a else 0))
-        return send_file(a.ocr_pdf_path, as_attachment=True, download_name=f"OCR-{a.filename or 'attachment.pdf'}")
+        a = db.get(FoiaAttachment, att_id)
+        if not a:
+            flash("Attachment not found.")
+            return redirect(url_for("home"))
+
+        # Prefer the searchable copy if we have it
+        if a.ocr_pdf_path and os.path.exists(a.ocr_pdf_path):
+            return send_file(a.ocr_pdf_path, mimetype="application/pdf",
+                             download_name=f"OCR-{a.filename or 'attachment.pdf'}")
+
+        # Fallback: stream the decrypted original so the viewer can still open it
+        if a.stored_path:
+            buf = decrypt_file_to_bytes(a.stored_path)
+            return send_file(io.BytesIO(buf), mimetype="application/pdf",
+                             download_name=a.filename or "attachment.pdf")
+
+        flash("No OCR copy available.")
+        return redirect(url_for("request_detail", req_id=a.foia_request_id))
     finally:
         db.close()
 
@@ -675,8 +887,20 @@ def project_mcpo_update_status():
             flash("Invalid status.")
             return redirect(url_for("project_detail", slug="mcpo-plea-deals"))
 
+        old = proj.status  # capture before change
         proj.status = ProjectStatus(new_status)
+
         db.commit()
+
+        if old != proj.status:
+            try:
+                emit("project.status_changed",
+                     project_id=proj.id,
+                     old=old.value,
+                     new=proj.status.value)
+            except Exception:
+                app.logger.exception("emit(project.status_changed) failed for project_id=%s", proj.id)
+
         flash("Status updated.")
         return redirect(url_for("project_detail", slug="mcpo-plea-deals"))
     finally:
@@ -740,6 +964,12 @@ def project_mcpo_upload():
 
     db = SessionLocal()
     try:
+        # Help avoid transient writer conflicts on SQLite
+        try:
+            db.execute(text("PRAGMA busy_timeout = 5000"))
+        except Exception:
+            pass
+
         for f in files:
             if not f or not f.filename:
                 continue
@@ -776,7 +1006,28 @@ def project_mcpo_upload():
                 size = 0
 
             mime = f.mimetype or None
+            looks_like_pdf = (mime and mime.lower().startswith("application/pdf")) or stored_path.lower().endswith(".pdf")
 
+            # --- If PDF, ensure it has a text layer before indexing (ocrmypdf) ---
+            if looks_like_pdf:
+                try:
+                    # Quick sniff for text layer (no OCR fallback here)
+                    pre_txt = extract_pdf_text(stored_path, ocr_fallback=False) or ""
+                    if len(pre_txt.strip()) < 20:
+                        # Likely scanned → make a searchable copy
+                        ocr_path = make_searchable_pdf(stored_path, lang="eng")
+                        if ocr_path and ocr_path != stored_path:
+                            os.replace(ocr_path, stored_path)
+                        try:
+                            size = os.path.getsize(stored_path)
+                        except Exception:
+                            size = size
+                        # normalize mime
+                        mime = "application/pdf"
+                except Exception:
+                    app.logger.exception("ocrmypdf failed for %r", stored_path)
+
+            # Create DB row (after potential OCR replacement so size/mime are accurate)
             doc = ProjectDocument(
                 project_slug="mcpo-plea-deals",
                 title=filename,
@@ -788,6 +1039,32 @@ def project_mcpo_upload():
             )
             db.add(doc)
             uploaded += 1
+            db.flush()  # ensure doc.id is available
+
+            # Index PDFs into FTS
+            if looks_like_pdf:
+                try:
+                    body = extract_pdf_text(doc.stored_path) or ""
+                except Exception:
+                    app.logger.exception("extract_pdf_text failed for doc_id=%s", doc.id)
+                    body = ""
+
+                try:
+                    # simple upsert: delete then insert to avoid dupes
+                    db.execute(text("DELETE FROM doc_fts WHERE doc_id = :id"), {"id": doc.id})
+                    db.execute(text("""
+                        INSERT INTO doc_fts (doc_id, title, body)
+                        VALUES (:id, :title, :body)
+                    """), {"id": doc.id, "title": (doc.title or doc.filename or "Untitled"), "body": body})
+                except Exception:
+                    app.logger.exception("FTS index insert failed for doc_id=%s", doc.id)
+
+            # Emit "document.uploaded" (resolve project_id from slug)
+            try:
+                proj_id = db.query(Project.id).filter(Project.slug == doc.project_slug).scalar()
+                emit("document.uploaded", doc_id=doc.id, project_id=proj_id)
+            except Exception:
+                app.logger.exception("emit(document.uploaded) failed for doc_id=%s", doc.id)
 
         db.commit()
     finally:
@@ -809,7 +1086,7 @@ def project_doc_update(doc_id: int):
 
     db = SessionLocal()
     try:
-        d = db.query(ProjectDocument, doc_id)
+        d = db.get(ProjectDocument, doc_id)
         if not d:
             flash("Document not found.")
             return redirect(url_for("project_detail", slug="mcpo-plea-deals"))
@@ -828,7 +1105,7 @@ def project_doc_update(doc_id: int):
 def project_doc_delete(doc_id: int):
     db = SessionLocal()
     try:
-        d = db.query(ProjectDocument, doc_id)
+        d = db.get(ProjectDocument, doc_id)
         if not d:
             flash("Document not found.")
             return redirect(url_for("project_detail", slug="mcpo-plea-deals"))
@@ -938,14 +1215,25 @@ def project_update_status(slug):
             flash("Project not found.")
             return redirect(url_for("projects_index"))
 
-        # Validate
         valid = {s.value for s in ProjectStatus}
         if new_status not in valid:
             flash("Invalid status.")
             return redirect(url_for("project_detail", slug=slug))
 
+        old = p.status  # capture before change
         p.status = ProjectStatus(new_status)
+
         db.commit()
+
+        if old != p.status:
+            try:
+                emit("project.status_changed",
+                     project_id=p.id,
+                     old=old.value,
+                     new=p.status.value)
+            except Exception:
+                app.logger.exception("emit(project.status_changed) failed for project_id=%s", p.id)
+
         flash("Status updated.")
         return redirect(url_for("project_detail", slug=slug))
     finally:
@@ -1024,45 +1312,68 @@ def projects_create():
     finally:
         db.close()
 
+def _parse_recipients(value):
+    if not value:
+        return []
+    if isinstance(value, (list, tuple, set)):
+        parts = list(value)
+    else:
+        # split on comma/semicolon/whitespace; remove empties
+        parts = re.split(r'[,\s;]+', str(value))
+    recips = [p.strip() for p in parts if p and p.strip()]
+    # optional: very light sanity check
+    return [r for r in recips if "@" in r and not r.startswith("@")]
+
+def _deliver(to_field, subject, body):
+    recipients = _parse_recipients(to_field or "")
+    if not recipients:
+        print("No valid recipients found in ALERT_TO/--to; skipping send.")
+        return
+    for addr in recipients:
+        send_email(Config, addr, subject, body)
+
 @app.cli.command("send-alerts")
-def send_alerts():
-    """
-    Project deadline alerts (21, 14, 7 days before) AND
-    FOIA pending reminders (every 7 days since last reminder).
-    """
-    db = SessionLocal()
-    try:
-        today = today_local()
+@click.option("--force", is_flag=True, help="Send regardless of last_* markers / 7-day spacing.")
+@click.option("--to", "override_to", default=None, help="Override recipients (comma/semicolon separated).")
+def send_alerts(force: bool, override_to: str | None):
+    base = os.getenv("APP_BASE_URL", getattr(Config, "APP_BASE_URL", "http://localhost:5000"))
+    with app.test_request_context(base_url=base):
+        db = SessionLocal()
+        try:
+            today = today_local()
 
-        # ---- Project deadline alerts ----
-        projects = db.query(Project).filter(Project.deadline.isnot(None)).all()
-        for p in projects:
-            dleft = days_until(p.deadline)
-            if dleft in (21, 14, 7):
-                # avoid double-send if we already sent today
-                if p.last_deadline_alert != today:
+            # ---- Projects ----
+            sent = 0
+            projects = db.query(Project).filter(Project.deadline.isnot(None)).all()
+            for p in projects:
+                dleft = days_until(p.deadline)
+                due = (dleft in (21,14,7))
+                if force or (due and p.last_deadline_alert != today):
                     subject = f"[FOIA Monitor] {p.name}: {dleft} days to deadline"
-                    body = f"Project: {p.name}\nDeadline: {p.deadline}\nDays left: {dleft}\n\n{url_for('project_detail', slug=p.slug, _external=True)}"
-                    send_email(Config, Config.ALERT_TO, subject, body)
+                    body = (f"Project: {p.name}\nDeadline: {p.deadline}\nDays left: {dleft}\n\n"
+                            f"{abs_url('project_detail', slug=p.slug)}")
+                    _deliver(override_to or Config.ALERT_TO, subject, body)
                     p.last_deadline_alert = today
+                    sent += 1
 
-        # ---- FOIA every-7-days reminders (Pending only) ----
-        pendings = db.query(FoiaRequest).filter(FoiaRequest.status == RequestStatus.PENDING).all()
-        for r in pendings:
-            last = r.last_reminder_at
-            due = (last is None) or ((today - last) >= timedelta(days=7))
-            if due:
-                ref = r.reference_number or f"Request #{r.id}"
-                subject = f"[FOIA Monitor] Reminder: {ref} still pending"
-                when = r.request_date and r.request_date.strftime("%m-%d-%Y") or "unknown"
-                body = f"{ref} is still pending.\nRequested: {when}\n\n{url_for('request_detail', req_id=r.id, _external=True)}"
-                send_email(Config, Config.ALERT_TO, subject, body)
-                r.last_reminder_at = today
+            # ---- FOIA reminders ----
+            pendings = db.query(FoiaRequest).filter(FoiaRequest.status == RequestStatus.PENDING).all()
+            for r in pendings:
+                last = r.last_reminder_at
+                due = (last is None) or ((today - last) >= timedelta(days=7))
+                if force or due:
+                    ref = r.reference_number or f"Request #{r.id}"
+                    subject = f"[FOIA Monitor] Reminder: {ref} still pending"
+                    when = r.request_date and r.request_date.strftime("%m-%d-%Y") or "unknown"
+                    body = f"{ref} is still pending.\nRequested: {when}\n\n{abs_url('request_detail', req_id=r.id)}"
+                    _deliver(override_to or Config.ALERT_TO, subject, body)
+                    r.last_reminder_at = today
+                    sent += 1
 
-        db.commit()
-        print("Alerts processed.")
-    finally:
-        db.close()
+            db.commit()
+            print(f"Alerts processed. Sent: {sent}")
+        finally:
+            db.close()
 
 @app.post("/projects/<slug>/deadline")
 def project_update_deadline(slug):
@@ -1077,6 +1388,47 @@ def project_update_deadline(slug):
         db.commit()
         flash("Deadline updated.")
         return redirect(url_for("project_detail", slug=slug))
+    finally:
+        db.close()
+
+@app.route("/project/<int:pid>/export.pdf")
+def project_export_pdf(pid):
+    db = SessionLocal()
+    try:
+        p = db.get(Project, pid)
+        if not p:
+            abort(404)
+
+        docs = (
+            db.query(ProjectDocument)
+              .filter(ProjectDocument.project_slug == p.slug)   # your docs are keyed by slug
+              .order_by(ProjectDocument.uploaded_at.desc())
+              .all()
+        )
+        foias = (
+            db.query(FoiaRequest)
+              .filter(FoiaRequest.project_id == p.id)
+              .order_by(FoiaRequest.request_date.desc())
+              .all()
+        )
+        datasets = db.query(WorkbenchDataset).filter(WorkbenchDataset.project_id == p.id).all()
+        notes = (
+            db.query(ProjectNote)
+              .filter(ProjectNote.project_id == p.id)
+              .order_by(ProjectNote.created_at.desc())
+              .all()
+        )
+
+        html = render_template("project_brief.html",
+                               project=p, docs=docs, foias=foias, datasets=datasets, notes=notes)
+        with tempfile.TemporaryDirectory() as tmp:
+            html_path = os.path.join(tmp, "brief.html")
+            pdf_path = os.path.join(tmp, f"{p.name}-brief.pdf")
+            with open(html_path, "w", encoding="utf-8") as f:
+                f.write(html)
+            subprocess.check_call(["wkhtmltopdf", "--enable-local-file-access", html_path, pdf_path])
+            return send_file(pdf_path, mimetype="application/pdf", as_attachment=True,
+                             download_name=f"{p.name}-brief.pdf")
     finally:
         db.close()
 
@@ -1132,6 +1484,11 @@ def workbench_upload():
             )
             db.add(ds)
             db.commit()  # ensures ds.id is available
+
+            try:
+                emit("workbench.dataset_created", dataset_id=ds.id, project_id=ds.project_id)
+            except Exception:
+                app.logger.exception("emit(workbench.dataset_created) failed for dataset_id=%s", ds.id)
 
             # Scan CSV and attempt to link rows to CourtCase by exact defendant_name (case-insensitive)
             with open(path, newline="", encoding="utf-8") as fh:
@@ -1201,7 +1558,7 @@ def workbench_view(ds_id):
     import csv
     db = SessionLocal()
     try:
-        ds = db.query(WorkbenchDataset).get(ds_id)
+        ds = db.get(WorkbenchDataset, ds_id)
         if not ds:
             flash("Dataset not found.")
             return redirect(url_for("workbench_index"))
@@ -1257,7 +1614,7 @@ def workbench_view(ds_id):
         default_group = ds.defendant_col if ds.defendant_col in fieldnames else fieldnames[0]
         group_by = (request.args.get("group_by") or default_group)
         preferred_metric = "Total_Charges" if "Total_Charges" in fieldnames else "row_count"
-        metric = (request.args.get("metric") or "preferred_metric")  # "row_count" or any numeric column
+        metric = (request.args.get("metric") or preferred_metric)  # "row_count" or any numeric column
         limit = request.args.get("limit") or "10"
         try:
             limit = max(1, min(100, int(limit)))
@@ -1290,7 +1647,6 @@ def workbench_view(ds_id):
         pdf_totals = []
         if ds.project_id:
             # sum per PDF
-            from sqlalchemy import desc
             pdf_rows = (
                 db.query(WorkbenchPdfLink.doc_id, ProjectDocument.title, func.sum(WorkbenchPdfLink.score).label("total"))
                 .join(ProjectDocument, ProjectDocument.id == WorkbenchPdfLink.doc_id)
@@ -1341,7 +1697,7 @@ def workbench_view(ds_id):
 def workbench_set_project(ds_id: int):
     db = SessionLocal()
     try:
-        ds = db.query(WorkbenchDataset).get(ds_id)
+        ds = db.get(WorkbenchDataset, ds_id)
         if not ds:
             flash("Dataset not found.")
             return redirect(url_for("workbench_index"))
@@ -1368,7 +1724,7 @@ def workbench_export_csv(ds_id: int):
     from io import StringIO
     db = SessionLocal()
     try:
-        ds = db.query(WorkbenchDataset).get(ds_id)
+        ds = db.get(WorkbenchDataset, ds_id)
         if not ds:
             flash("Dataset not found.")
             return redirect(url_for("workbench_index"))
@@ -1524,6 +1880,137 @@ def workbench_scan_pdfs(ds_id: int):
         return redirect(url_for("workbench_view", ds_id=ds_id, group_by=group_by))
     finally:
         db.close()
+
+@app.cli.command("fts-reindex")
+def fts_reindex():
+    """
+    Extract text from all PDFs and (re)populate FTS.
+    Stop the dev server before running to avoid locks.
+    """
+    from search_text import extract_pdf_text  # uses pdfminer in your project
+    inserted = 0
+    with engine.begin() as conn:
+        # ensure table exists
+        conn.execute(text("""
+            CREATE VIRTUAL TABLE IF NOT EXISTS doc_fts USING fts5(
+              doc_id UNINDEXED,
+              title,
+              body,
+              tokenize='porter'
+            );
+        """))
+
+        # delete stragglers pointing to missing docs
+        conn.execute(text("""
+            DELETE FROM doc_fts
+            WHERE doc_id NOT IN (SELECT id FROM project_documents)
+        """))
+
+        # pull PDFs
+        docs = list(conn.execute(text("""
+            SELECT d.id AS id,
+                   COALESCE(NULLIF(d.title,''), d.filename) AS title,
+                   d.stored_path AS path
+              FROM project_documents d
+             WHERE ( (d.mime_type IS NOT NULL AND lower(d.mime_type) LIKE 'application/pdf%')
+                     OR lower(d.filename) LIKE '%.pdf')
+        """)).mappings())
+
+        for row in docs:
+            try:
+                body = extract_pdf_text(row["path"]) or ""
+            except Exception:
+                body = ""
+            # upsert via delete+insert
+            conn.execute(text("DELETE FROM doc_fts WHERE doc_id = :id"), {"id": row["id"]})
+            conn.execute(text("""
+                INSERT INTO doc_fts (doc_id, title, body)
+                VALUES (:id, :title, :body)
+            """), {"id": row["id"], "title": row["title"] or "Untitled", "body": body})
+            inserted += 1
+
+    print(f"FTS reindex complete: {inserted} docs")
+    with engine.begin() as c:
+        total = c.execute(text("SELECT COUNT(*) FROM doc_fts")).scalar()
+        nonempty = c.execute(text("SELECT COUNT(*) FROM doc_fts WHERE length(body)>0")).scalar()
+        print("doc_fts total:", total, "with text:", nonempty)
+
+@app.cli.command("entities-rebuild")
+def entities_rebuild():
+    """Naive pass over FTS text to seed entities + mentions."""
+    import re, datetime
+    now = datetime.datetime.utcnow().isoformat()
+
+    with engine.begin() as conn:
+        conn.execute(text("""
+            CREATE TABLE IF NOT EXISTS entities (
+                id   INTEGER PRIMARY KEY,
+                name TEXT NOT NULL,
+                kind TEXT NOT NULL
+            )
+        """))
+        conn.execute(text("""
+            CREATE TABLE IF NOT EXISTS entity_mentions (
+                id INTEGER PRIMARY KEY,
+                entity_id INTEGER NOT NULL,
+                doc_id INTEGER NOT NULL,
+                created_at TEXT
+            )
+        """))
+        conn.execute(text("DELETE FROM entity_mentions"))
+        conn.execute(text("DELETE FROM entities"))
+
+        docs = list(conn.execute(text("""
+            SELECT d.id AS doc_id,
+                   COALESCE(NULLIF(d.title,''), d.filename) AS title,
+                   f.body AS body
+              FROM doc_fts f
+              JOIN project_documents d ON d.id = f.doc_id
+        """)).mappings())
+
+        NAME_RX = re.compile(r"\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+){1,3})\b")
+        AGENCY_HINTS = {"sheriff","police","department","office","prosecutor","county","state","city","board","court"}
+
+        def looks_like_org(s: str) -> bool:
+            lw = s.lower()
+            return any(w in lw for w in AGENCY_HINTS) or s.isupper()
+
+        ent_cache = {}  # (name.lower(), kind) -> id
+        def upsert(name, kind):
+            key = (name.lower(), kind)
+            if key in ent_cache:
+                return ent_cache[key]
+            conn.execute(text("INSERT INTO entities (name, kind) VALUES (:n,:k)"), {"n": name, "k": kind})
+            eid = conn.execute(text("SELECT last_insert_rowid()")).scalar()
+            ent_cache[key] = eid
+            return eid
+
+        for r in docs:
+            blob = ((r["title"] or "") + " " + (r["body"] or "")).strip()
+            if not blob:
+                continue
+
+            for m in NAME_RX.finditer(blob):
+                cand = m.group(1)
+                if len(cand) < 5:
+                    continue
+                eid = upsert(cand, "person")
+                conn.execute(text("""
+                    INSERT INTO entity_mentions (entity_id, doc_id, created_at)
+                    VALUES (:e,:d,:ts)
+                """), {"e": eid, "d": r["doc_id"], "ts": now})
+
+            for phrase in re.findall(r"[A-Za-z][A-Za-z&.\-]+(?:\s+[A-Za-z&.\-]+){1,4}", blob):
+                if len(phrase) < 6:
+                    continue
+                if looks_like_org(phrase):
+                    eid = upsert(phrase.strip(), "org")
+                    conn.execute(text("""
+                        INSERT INTO entity_mentions (entity_id, doc_id, created_at)
+                        VALUES (:e,:d,:ts)
+                    """), {"e": eid, "d": r["doc_id"], "ts": now})
+
+    print("Entities rebuilt.")
 
 # -----------------------------
 # Entrypoint

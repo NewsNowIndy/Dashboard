@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+{% block content %}
+<h3>Search</h3>
+<form class="mb-3">
+  <input class="form-control" name="q" value="{{ q }}" placeholder="Search PDFs…">
+</form>
+{% if rows %}
+<div class="list-group">
+  {% for r in rows %}
+  {% set file_url = (url_for('docs.inline_view', doc_id=r.id) if r.src == 'project'
+                    else url_for('download_ocr', att_id=r.id)) %}
+  <a class="list-group-item list-group-item-action" href="#"
+    onclick="openPdfModalBtn('{{ file_url }}'); return false;">
+    <div class="fw-bold">{{ r.title }}</div>
+    <div class="small text-muted">{{ r.excerpt|safe }}</div>
+  </a>
+  {% endfor %}
+</div>
+{% elif q %}<p>No results.</p>{% endif %}
+
+{% include '_pdf_modal.html' %}
+<script>
+  function openPdfModalBtn(u){
+    const viewer = "{{ url_for('static', filename='pdfjs/web/viewer.html') }}";
+    const src = viewer + "?file=" + encodeURIComponent(u) + "#pagemode=none";
+    document.getElementById('pdfFrame').src = src;
+    new bootstrap.Modal(document.getElementById('pdfModal')).show();
+  }
+</script>
+{% endblock %}

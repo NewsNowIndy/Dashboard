@@ -43,18 +43,16 @@ def ocr_with_pymupdf_tesseract(in_pdf: str, out_pdf: str) -> bool:
     except Exception:
         return False
 
-
-def make_searchable(in_pdf: str, out_pdf: str) -> bool:
-    if pdf_has_text(in_pdf):
-        # already searchable; just copy
-        try:
-            import shutil
-            shutil.copy2(in_pdf, out_pdf)
-            return True
-        except Exception:
-            pass
-    # try ocrmypdf first
-    if ocr_with_ocrmypdf(in_pdf, out_pdf):
-        return True
-    # fallback
-    return ocr_with_pymupdf_tesseract(in_pdf, out_pdf)
+def make_searchable(in_path, out_path, lang="eng"):
+    try:
+        cp = subprocess.run(
+            ["ocrmypdf", "-l", lang, "--skip-text", in_path, out_path],
+            check=False, capture_output=True, text=True
+        )
+        if cp.returncode != 0:
+            print(f"[ocr] ocrmypdf failed ({cp.returncode})\nSTDERR:\n{cp.stderr[:2000]}")
+            return False
+        return os.path.exists(out_path)
+    except FileNotFoundError:
+        print("[ocr] ocrmypdf not found on PATH. Install it (brew install ocrmypdf tesseract).")
+        return False

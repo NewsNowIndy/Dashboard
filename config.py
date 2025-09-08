@@ -46,4 +46,4 @@ class Config:
     MAIL_USE_TLS = True
     MAIL_USE_SSL = False
 
-    ALERT_TO = os.getenv("ALERT_TO", MAIL_USERNAME or "you@example.com")  # where to send alerts
+    ALERT_TO = os.getenv("ALERT_TO", MAIL_USERNAME)  # where to send alerts

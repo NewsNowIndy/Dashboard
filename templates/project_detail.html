@@ -34,6 +34,9 @@
     </select>
   </form>
 </div>
+<a class="btn btn-outline-light" href="{{ url_for('project_export_pdf', pid=project.id) }}">
+    Export Project PDF
+  </a>  
 
 <!-- Notes (top) -->
 <div class="card mb-4">

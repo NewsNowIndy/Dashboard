@@ -1,0 +1,73 @@
+<!-- templates/project_brief.html -->
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>{{ project.name }} – Brief</title>
+  <style>
+    body { font-family: Inter, system-ui, -apple-system, Arial; color:#111; }
+    h1,h2{ margin:0 0 .4rem 0; }
+    .muted{ color:#666; }
+    table{ width:100%; border-collapse:collapse; }
+    th, td{ border:1px solid #ddd; padding:.4rem; vertical-align:top; }
+    th{ background:#f3f3f3; text-align:left; }
+    .section{ margin: 1.2rem 0; page-break-inside: avoid; }
+  </style>
+</head>
+<body>
+  <h1>{{ project.name }}</h1>
+  <div class="muted">Created: {{ project.created_at }} • Deadline: {{ project.deadline_at or 'N/A' }} • Status: {{ project.status }}</div>
+
+  <div class="section">
+    <h2>Documents</h2>
+    <table>
+      <thead><tr><th>Title</th><th>Upload Date</th></tr></thead>
+      <tbody>
+        {% for d in docs %}
+        <tr><td>{{ d.title }}</td><td>{{ d.uploaded_at }}</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  <div class="section">
+    <h2>FOIA Requests</h2>
+    <table>
+      <thead><tr><th>Reference #</th><th>Agency</th><th>Notes</th><th>Status</th><th>Requested</th><th>Completed</th></tr></thead>
+      <tbody>
+        {% for r in foias %}
+        <tr>
+          <td>{{ r.reference_number }}</td>
+          <td>{{ r.agency }}</td>
+          <td>{{ r.notes }}</td>
+          <td>{{ r.status }}</td>
+          <td>{{ r.requested_at }}</td>
+          <td>{{ r.completed_at or '—' }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  <div class="section">
+    <h2>Workbench Datasets</h2>
+    <ul>
+      {% for ds in datasets %}
+      <li>{{ ds.name }} ({{ ds.id }})</li>
+      {% endfor %}
+    </ul>
+  </div>
+
+  <div class="section">
+    <h2>Notes</h2>
+    <table>
+      <thead><tr><th>Title</th><th>Note</th><th>Created</th></tr></thead>
+      <tbody>
+        {% for n in notes %}
+        <tr><td>{{ n.title }}</td><td>{{ n.body }}</td><td>{{ n.created_at }}</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</body>
+</html>

@@ -57,8 +57,17 @@
               <li><a class="dropdown-item" href="{{ url_for('workbench_upload') }}">Upload to Workbench</a></li>
             </ul>
           </li>
+          <li class="nav-item dropdown">
+            <a class="nav-link dropdown-toggle" href="#" id="toolsMenu" role="button" data-bs-toggle="dropdown" aria-expanded="false">
+              Tools
+            </a>
+            <ul class="dropdown-menu" aria-labelledby="dataMenu">
+              <li class="nav-item"><a class="nav-link" href="{{ url_for('search.search') }}">Search</a></li>
+              <li class="nav-item"><a class="nav-link" href="{{ url_for('entities.entities_index') }}">People/Orgs</a></li>
+            </ul>
+          </li>
         </ul>
-
+        <a href="{{ url_for('calendar.calendar_all') }}">Calendar (.ics)</a>
         <!-- (Optional) right-side slot for future controls/search -->
         <!-- <form class="d-flex" method="get" action="{{ url_for('home') }}">
           <input class="form-control me-2" type="search" name="q" placeholder="Search…" value="{{ request.args.get('q','') }}">
