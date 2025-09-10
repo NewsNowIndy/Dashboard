@@ -26,7 +26,6 @@ from pdfminer.high_level import extract_text
 from routes_search import bp_search
 from routes_docs import bp_docs
 from routes_entities import bp_entities
-from routes_calendar import bp_calendar
 from scheduler import start_scheduler
 from search_text import extract_pdf_text
 from events import emit
@@ -44,6 +43,7 @@ def ensure_fts_tables(engine):
         """))
 
 app = Flask(__name__)
+from calendar_feed import bp as bp_calendar
 app.config.from_object(Config)
 app.config["MAX_CONTENT_LENGTH"] = 512 * 1024 * 1024       # 512 MB cap (total request)
 app.config["MAX_FORM_MEMORY_SIZE"] = 128 * 1024 * 1024     # 128 MB memory threshold for form parsing
