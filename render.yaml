@@ -1,0 +1,21 @@
+services:
+  - type: web
+    name: newsnowindy
+    env: docker
+    plan: starter
+    healthCheckPath: /healthz
+    disk:
+      name: foia-data
+      mountPath: /var/foia
+      sizeGB: 10
+    envVars:
+      - key: APP_ENV
+        value: prod
+      - key: UPLOAD_DIR
+        value: /var/foia/uploads
+      - key: SQLITE_PATH
+        value: /var/foia/foia.db
+      - key: FLASK_SECRET_KEY
+        sync: false
+      - key: FERNET_KEY
+        sync: false

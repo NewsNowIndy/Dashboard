@@ -1,4 +1,4 @@
-Flask==3.0.3
+Flask>=3.0.3
 Flask-WTF==1.2.1
 WTForms==3.1.2
 python-dotenv==1.0.1
@@ -15,6 +15,7 @@ google-auth-oauthlib==1.2.1
 python-dateutil==2.9.0.post0
 pandas==2.2.2
 pdfminer.six
-TESSERACT_CMD=/opt/homebrew/bin/tesseract
 gunicorn>=22.0
 requests
+python-dotenv
+click

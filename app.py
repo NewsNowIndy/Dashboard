@@ -23,7 +23,8 @@ from sheets_ingest import import_cases_from_csv, import_cases_from_gsheet, impor
 from werkzeug.utils import secure_filename
 from werkzeug.exceptions import RequestEntityTooLarge, BadRequest, ClientDisconnected
 from werkzeug.security import generate_password_hash
-from sqlalchemy import func, or_, case, text, desc
+from sqlalchemy import func, or_, case, text, desc, event
+from sqlalchemy.engine import Engine
 from pdfminer.high_level import extract_text
 from routes_search import bp_search
 from routes_docs import bp_docs
@@ -35,6 +36,16 @@ from urllib.parse import urljoin
 from models import User  # ensure User is imported here
 from calendar_feed import bp as bp_calendar
 from auth import bp_auth
+
+@event.listens_for(Engine, "connect")
+def _sqlite_pragmas(dbapi_conn, _):
+    cur = dbapi_conn.cursor()
+    try:
+        cur.execute("PRAGMA journal_mode=WAL;")
+        cur.execute("PRAGMA synchronous=NORMAL;")
+        cur.execute("PRAGMA busy_timeout=5000;")
+    finally:
+        cur.close()
 
 def ensure_fts_tables(engine):
     with engine.begin() as conn:
@@ -79,8 +90,10 @@ ensure_fts_tables(engine)
 start_scheduler(app)
 
 # Ensure uploads dir exists
-os.makedirs("data", exist_ok=True)
-os.makedirs("data/projects/mcpo-plea-deals", exist_ok=True) # Storage for Projects
+os.makedirs(Config.DATA_DIR, exist_ok=True)
+os.makedirs(Config.PROJECTS_DIR, exist_ok=True)
+os.makedirs(os.path.join(Config.PROJECTS_DIR, "mcpo-plea-deals"), exist_ok=True)
+os.makedirs(Config.WORKBENCH_DIR, exist_ok=True)
 
 # -----------------------------
 # Helpers
@@ -834,7 +847,7 @@ def surrounding_cases_upload():
             flash("Please upload a .csv file")
             return redirect(url_for("surrounding_cases_upload"))
 
-        path = os.path.join("data", filename)
+        path = os.path.join(Config.CASES_DIR, secure_filename(filename))
         f.save(path)
 
         try:
@@ -887,7 +900,7 @@ def cases_upload():
             flash("Please upload a .csv file")
             return redirect(url_for("cases_upload"))
 
-        path = os.path.join("data", filename)
+        path = os.path.join(Config.CASES_DIR, secure_filename(filename))
         f.save(path)
 
         try:
@@ -1022,7 +1035,7 @@ def project_mcpo_upload():
         return redirect(url_for("project_detail", slug="mcpo-plea-deals"))
 
     uploaded, skipped = 0, []
-    dest_dir = os.path.join("data", "projects", "mcpo-plea-deals")
+    dest_dir = os.path.join(Config.PROJECTS_DIR, "mcpo-plea-deals")
     os.makedirs(dest_dir, exist_ok=True)
 
     db = SessionLocal()
@@ -1545,7 +1558,7 @@ def workbench_upload():
         proj_id = int(proj_id_s) if proj_id_s.isdigit() else None
 
         # Save upload to data/workbench/
-        dest_dir = os.path.join("data", "workbench")
+        dest_dir = Config.WORKBENCH_DIR
         os.makedirs(dest_dir, exist_ok=True)
         path = os.path.join(dest_dir, secure_filename(f.filename))
         f.save(path)

@@ -1,41 +1,52 @@
 import os
 from dotenv import load_dotenv
 
-
 load_dotenv()
 
-
 class Config:
+    # ---- Environment toggle ----
+    # APP_ENV=prod on Render; default dev locally
+    APP_ENV = os.getenv("APP_ENV", "dev").lower()
+
+    # ---- Storage roots (DB file + uploads) ----
+    if APP_ENV == "prod":
+        # Render: point at your Persistent Disk
+        SQLITE_PATH = os.getenv("SQLITE_PATH", "/var/foia/foia.db")
+        DATA_DIR    = os.getenv("UPLOAD_DIR", "/var/foia/uploads")
+    else:
+        # Local dev: use a local instance folder (outside git)
+        _instance = os.getenv("INSTANCE_DIR") or os.path.join(os.path.dirname(__file__), "instance")
+        os.makedirs(_instance, exist_ok=True)
+        SQLITE_PATH = os.getenv("SQLITE_PATH", os.path.join(_instance, "foia.db"))
+        DATA_DIR    = os.getenv("UPLOAD_DIR", os.path.join(_instance, "uploads"))
+
+    # Derived subdirs (keep your existing names)
+    ATTACH_DIR   = os.path.join(DATA_DIR, "attachments")
+    OCR_CACHE    = os.path.join(DATA_DIR, "ocr_cache")
+    PROJECTS_DIR = os.path.join(DATA_DIR, "projects")
+    WORKBENCH_DIR= os.path.join(DATA_DIR, "workbench")
+    CASES_DIR    = os.path.join(DATA_DIR, "cases")
+
+    # Ensure directories exist
+    for p in (DATA_DIR, ATTACH_DIR, OCR_CACHE, PROJECTS_DIR, WORKBENCH_DIR, CASES_DIR):
+        os.makedirs(p, exist_ok=True)
+
+
     SECRET_KEY = os.getenv("SECRET_KEY", "dev-insecure-change-me")
-    SQLALCHEMY_DATABASE_URI = os.getenv("DATABASE_URL", "sqlite:///foia.db")
+    SQLALCHEMY_DATABASE_URI = f"sqlite:///{SQLITE_PATH}?check_same_thread=false"
     SQLALCHEMY_ECHO = False
     SQLALCHEMY_TRACK_MODIFICATIONS = False
 
 
-    DATA_DIR = os.path.join(os.path.dirname(__file__), 'data')
-    ATTACH_DIR = os.path.join(DATA_DIR, 'attachments')
-    OCR_CACHE = os.path.join(DATA_DIR, 'ocr_cache')
+    # Must exist in env (same as your current code)
+    FERNET_KEY = os.environ["FERNET_KEY"]
 
-
-    os.makedirs(ATTACH_DIR, exist_ok=True)
-    os.makedirs(OCR_CACHE, exist_ok=True)
-
-
-    FERNET_KEY = os.environ["FERNET_KEY"] # must exist
-
-
+    # ---- Gmail / mail (unchanged defaults) ----
     GMAIL_QUERY = os.getenv("GMAIL_QUERY", "label:inbox \"Public Records Request\"")
     ALLOWED_SENDERS = [s.strip() for s in os.getenv("ALLOWED_SENDERS", "").split(',') if s.strip()]
 
-
-    # Court Cases
-    MAX_UPLOAD_SIZE_MB = 50
-
-    # Allow fetching PDF links embedded in the email HTML
-    FETCH_LINKED_PDFS = True
-
-    # Only fetch from these hostnames (lowercase). Add what you need:
-    # Common patterns: "indy.gov", "mycusthelp.com", "nextrequest.com", "sharefile.com"
+    MAX_UPLOAD_SIZE_MB = int(os.getenv("MAX_UPLOAD_SIZE_MB", "50"))
+    FETCH_LINKED_PDFS = os.getenv("FETCH_LINKED_PDFS", "true").lower() == "true"
     ALLOWED_LINK_HOSTS = None
 
     MAIL_HOST = os.getenv("MAIL_HOST", "smtp.gmail.com")
@@ -46,4 +57,7 @@ class Config:
     MAIL_USE_TLS = True
     MAIL_USE_SSL = False
 
-    ALERT_TO = os.getenv("ALERT_TO", MAIL_USERNAME)  # where to send alerts
+    ALERT_TO = os.getenv("ALERT_TO", MAIL_USERNAME)
+
+    # Optional: used by abs_url() helper
+    APP_BASE_URL = os.getenv("APP_BASE_URL", "")
