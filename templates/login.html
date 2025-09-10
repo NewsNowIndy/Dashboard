@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="container" style="max-width: 420px;">
+  <h3 class="mb-3">Sign in</h3>
+  <form method="post" action="{{ url_for('auth.login', next=request.args.get('next')) }}">
+    <div class="mb-3">
+      <label for="email" class="form-label">Email</label>
+      <input name="email" id="email" type="email" class="form-control" required autofocus>
+    </div>
+    <div class="mb-3">
+      <label for="password" class="form-label">Password</label>
+      <input name="password" id="password" type="password" class="form-control" required>
+    </div>
+    <div class="form-check mb-3">
+      <input class="form-check-input" type="checkbox" value="1" id="remember" name="remember">
+      <label class="form-check-label" for="remember">Remember me</label>
+    </div>
+    <button class="btn btn-primary w-100" type="submit">Sign in</button>
+  </form>
+</div>
+{% endblock %}

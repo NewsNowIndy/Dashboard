@@ -16,3 +16,5 @@ python-dateutil==2.9.0.post0
 pandas==2.2.2
 pdfminer.six
 TESSERACT_CMD=/opt/homebrew/bin/tesseract
+gunicorn>=22.0
+requests

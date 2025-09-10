@@ -1,10 +1,11 @@
 from datetime import datetime, date
-from sqlalchemy import create_engine, Column, Integer, String, Date, DateTime, Enum, ForeignKey, Boolean, Text, Index, Enum as SAEnum, CheckConstraint
+from sqlalchemy import create_engine, Column, Integer, String, Date, DateTime, Enum, ForeignKey, Boolean, Text, Index, Enum as SAEnum, CheckConstraint, func, UniqueConstraint
 from sqlalchemy.orm import declarative_base, relationship, sessionmaker
 from config import Config
 from utils import EncryptedBytes
 from enum import Enum as PyEnum
 import enum
+from werkzeug.security import generate_password_hash, check_password_hash
 
 engine = create_engine(Config.SQLALCHEMY_DATABASE_URI, future=True)
 SessionLocal = sessionmaker(bind=engine, expire_on_commit=False)
@@ -190,6 +191,29 @@ class EntityMention(Base):
     # IMPORTANT: point to project_documents
     doc_id = Column(Integer, ForeignKey("project_documents.id", ondelete="CASCADE"), nullable=False, index=True)
     created_at = Column(DateTime, default=datetime.utcnow)
+
+class User(Base):
+    __tablename__ = "users"
+    id = Column(Integer, primary_key=True)
+    email = Column(String(255), nullable=False, unique=True, index=True)
+    password_hash = Column(String(255), nullable=False)
+    created_at = Column(DateTime, server_default=func.now())
+
+    # Flask-Login integration helpers:
+    @property
+    def is_authenticated(self): return True
+    @property
+    def is_active(self): return True
+    @property
+    def is_anonymous(self): return False
+    def get_id(self): return str(self.id)
+
+    # password helpers
+    def set_password(self, password: str):
+        self.password_hash = generate_password_hash(password)
+
+    def check_password(self, password: str) -> bool:
+        return check_password_hash(self.password_hash, password)
 
 def init_db():
     Base.metadata.create_all(engine)

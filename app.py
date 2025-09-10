@@ -1,4 +1,4 @@
-from flask import Flask, render_template, request, redirect, url_for, send_file, flash, abort
+from flask import Flask, render_template, request, redirect, url_for, send_file, flash, abort, jsonify
 from datetime import datetime, date, timedelta
 from zoneinfo import ZoneInfo
 import io
@@ -8,6 +8,7 @@ import tempfile
 import subprocess
 import csv
 import click
+from flask_login import LoginManager, login_required, current_user
 
 from config import Config
 # app.py — REPLACE the models import with:
@@ -21,6 +22,7 @@ from utils import decrypt_file_to_bytes, normalize_request_status, days_until, a
 from sheets_ingest import import_cases_from_csv, import_cases_from_gsheet, import_surrounding_cases_from_csv, import_surrounding_cases_from_gsheet
 from werkzeug.utils import secure_filename
 from werkzeug.exceptions import RequestEntityTooLarge, BadRequest, ClientDisconnected
+from werkzeug.security import generate_password_hash
 from sqlalchemy import func, or_, case, text, desc
 from pdfminer.high_level import extract_text
 from routes_search import bp_search
@@ -30,6 +32,9 @@ from scheduler import start_scheduler
 from search_text import extract_pdf_text
 from events import emit
 from urllib.parse import urljoin
+from models import User  # ensure User is imported here
+from calendar_feed import bp as bp_calendar
+from auth import bp_auth
 
 def ensure_fts_tables(engine):
     with engine.begin() as conn:
@@ -43,8 +48,20 @@ def ensure_fts_tables(engine):
         """))
 
 app = Flask(__name__)
-from calendar_feed import bp as bp_calendar
 app.config.from_object(Config)
+# Flask-Login Setup
+login_manager = LoginManager()
+login_manager.login_view = "auth.login"  # where to send anonymous users
+login_manager.login_message_category = "warning"
+login_manager.init_app(app)
+
+@login_manager.user_loader
+def load_user(user_id: str):
+    db = SessionLocal()
+    try:
+        return db.get(User, int(user_id))
+    finally:
+        db.close()
 app.config["MAX_CONTENT_LENGTH"] = 512 * 1024 * 1024       # 512 MB cap (total request)
 app.config["MAX_FORM_MEMORY_SIZE"] = 128 * 1024 * 1024     # 128 MB memory threshold for form parsing
 app.config["MAX_FORM_PARTS"] = 20000                       # lots of parts for multi-file uploads
@@ -55,6 +72,7 @@ app.register_blueprint(bp_search)
 app.register_blueprint(bp_docs)
 app.register_blueprint(bp_entities)
 app.register_blueprint(bp_calendar)
+app.register_blueprint(bp_auth, url_prefix="")
 
 ensure_fts_tables(engine)
 
@@ -68,8 +86,31 @@ os.makedirs("data/projects/mcpo-plea-deals", exist_ok=True) # Storage for Projec
 # Helpers
 # -----------------------------
 
+@app.cli.command("create-user")
+@click.argument("email")
+@click.argument("password")
+def create_user(email, password):
+    """Create a user: flask create-user EMAIL PASSWORD"""
+    email = email.strip().lower()
+    db = SessionLocal()
+    try:
+        from models import User
+        if db.query(User).filter(User.email == email).first():
+            print("User already exists.")
+            return
+        u = User(email=email, password_hash=generate_password_hash(password))
+        db.add(u)
+        db.commit()
+        print(f"Created user {email} (id={u.id})")
+    finally:
+        db.close()
+
 LOCAL_TZ = ZoneInfo("America/Indiana/Indianapolis")
 UTC = ZoneInfo("UTC")
+
+@app.get("/healthz")
+def healthz():
+    return jsonify(status="ok"), 200
 
 def today_local():
     return datetime.now(LOCAL_TZ).date()
@@ -276,6 +317,7 @@ def abs_url(endpoint, **values):
 # FOIA: Home / Search (sorted by Reference # desc)
 # -----------------------------
 @app.route("/")
+@login_required
 def home():
     q = request.args.get("q", "").strip()
     db = SessionLocal()
@@ -411,6 +453,7 @@ def sync():
 # FOIA: Create new manual request
 # -----------------------------
 @app.route("/requests/new", methods=["GET", "POST"])
+@login_required
 def new_request():
     if request.method == "POST":
         db = SessionLocal()
@@ -435,6 +478,7 @@ def new_request():
 # FOIA: Request detail + status update
 # -----------------------------
 @app.route("/requests/<int:req_id>")
+@login_required
 def request_detail(req_id):
     db = SessionLocal()
     try:
@@ -462,6 +506,7 @@ def request_detail(req_id):
         db.close()
 
 @app.post("/requests/<int:req_id>/project")
+@login_required
 def request_set_project(req_id):
     pid = request.form.get("project_id", "").strip()  # "" or "123"
     db = SessionLocal()
@@ -493,6 +538,7 @@ def request_set_project(req_id):
         db.close()
 
 @app.route("/requests/<int:req_id>/status", methods=["POST"])
+@login_required
 def request_status(req_id):
     db = SessionLocal()
     try:
@@ -523,6 +569,7 @@ def request_status(req_id):
         db.close()
 
 @app.post("/requests/<int:req_id>/dates")
+@login_required
 def update_request_dates(req_id: int):
     db = SessionLocal()
     try:
@@ -551,6 +598,7 @@ def update_request_dates(req_id: int):
 # FOIA: Delete a request (and its files)
 # -----------------------------
 @app.route("/requests/<int:req_id>/delete", methods=["POST"])
+@login_required
 def request_delete(req_id):
     db = SessionLocal()
     try:
@@ -589,6 +637,7 @@ def request_delete(req_id):
 # FOIA: Attachments (encrypted + OCR copy)
 # -----------------------------
 @app.route("/attachments/<int:att_id>")
+@login_required
 def download_attachment(att_id):
     db = SessionLocal()
     try:
@@ -608,6 +657,7 @@ def download_attachment(att_id):
         db.close()
 
 @app.route("/attachments/<int:att_id>/ocr")
+@login_required
 def download_ocr(att_id):
     db = SessionLocal()
     try:
@@ -636,6 +686,7 @@ def download_ocr(att_id):
 # FOIA: Export CSV
 # -----------------------------
 @app.route("/export.csv")
+@login_required
 def export_csv():
     db = SessionLocal()
     try:
@@ -654,6 +705,7 @@ def export_csv():
         db.close()
 
 @app.post("/requests/<int:req_id>/agency")
+@login_required
 def update_request_agency(req_id: int):
     db = SessionLocal()
     try:
@@ -670,6 +722,7 @@ def update_request_agency(req_id: int):
         db.close()
 
 @app.post("/requests/<int:req_id>/meta")
+@login_required
 def update_request_meta(req_id: int):
     db = SessionLocal()
     try:
@@ -693,6 +746,7 @@ def update_request_meta(req_id: int):
 # Court Cases: Dashboard
 # -----------------------------
 @app.route("/cases/dashboard")
+@login_required
 def cases_dashboard():
     db = SessionLocal()
 
@@ -756,6 +810,7 @@ def cases_dashboard():
 # ===== Surrounding Counties =====
 
 @app.route("/surrounding/dashboard")
+@login_required
 def surrounding_cases_dashboard():
     conv_type, disposition, sentences = build_case_charts(SurroundingCase)
     return render_template(
@@ -766,6 +821,7 @@ def surrounding_cases_dashboard():
     )
 
 @app.route("/surrounding/upload", methods=["GET", "POST"])
+@login_required
 def surrounding_cases_upload():
     if request.method == "POST":
         f = request.files.get("file")
@@ -794,6 +850,7 @@ def surrounding_cases_upload():
     return render_template("upload_cases.html")
 
 @app.route("/surrounding/import_gsheet", methods=["POST"])
+@login_required
 def surrounding_cases_import_gsheet():
     url = request.form.get("sheet_url", "").strip()
     if not url:
@@ -817,6 +874,7 @@ def surrounding_cases_import_gsheet():
 # Court Cases: Upload CSV / Import GSheet
 # -----------------------------
 @app.route("/cases/upload", methods=["GET", 'POST'])
+@login_required
 def cases_upload():
     if request.method == "POST":
         f = request.files.get("file")
@@ -845,6 +903,7 @@ def cases_upload():
 
 
 @app.route("/cases/import_gsheet", methods=["POST"])
+@login_required
 def cases_import_gsheet():
     url = request.form.get("sheet_url", "").strip()
     if not url:
@@ -868,11 +927,13 @@ def cases_import_gsheet():
 # Convenience redirect: /cases -> /cases/dashboard
 @app.route("/cases")
 @app.route("/cases/")
+@login_required
 def cases_index():
     return redirect(url_for("cases_dashboard"))
 
 # -------- MCPO Plea Deals: list & upload --------
 @app.post("/projects/mcpo-plea-deals/status")
+@login_required
 def project_mcpo_update_status():
     new_status = (request.form.get("status", "").strip())
     db = SessionLocal()
@@ -907,6 +968,7 @@ def project_mcpo_update_status():
         db.close()
 
 @app.post("/projects/mcpo-plea-deals/notes/add")
+@login_required
 def project_mcpo_add_note():
     title = (request.form.get("title", "").strip())
     body  = (request.form.get("body", "").strip() or None)
@@ -936,6 +998,7 @@ def handle_file_too_large(e):
     return redirect(url_for("project_detail", slug="mcpo-plea-deals")), 413
 
 @app.route("/projects/mcpo-plea-deals/upload", methods=["POST"])
+@login_required
 def project_mcpo_upload():
     # Be strict about content type
     ctype = request.headers.get("Content-Type", "")
@@ -1080,6 +1143,7 @@ def project_mcpo_upload():
 
 # -------- MCPO Plea Deals: edit title/notes --------
 @app.post("/projects/doc/<int:doc_id>/update")
+@login_required
 def project_doc_update(doc_id: int):
     title = (request.form.get("title", "").strip() or None)
     notes = (request.form.get("notes", "").strip() or None)
@@ -1102,6 +1166,7 @@ def project_doc_update(doc_id: int):
 
 # -------- MCPO Plea Deals: delete --------
 @app.post("/projects/doc/<int:doc_id>/delete")
+@login_required
 def project_doc_delete(doc_id: int):
     db = SessionLocal()
     try:
@@ -1126,6 +1191,7 @@ def project_doc_delete(doc_id: int):
 
 # -------- MCPO Plea Deals: download --------
 @app.get("/projects/doc/<int:doc_id>/download")
+@login_required
 def project_doc_download(doc_id: int):
     db = SessionLocal()
     try:
@@ -1140,6 +1206,7 @@ def project_doc_download(doc_id: int):
         db.close()
 
 @app.route("/dashboard")
+@login_required
 def dashboard():
     db = SessionLocal()
     try:
@@ -1171,6 +1238,7 @@ def dashboard():
         db.close()
 
 @app.get("/projects/<slug>")
+@login_required
 def project_detail(slug):
     db = SessionLocal()
     try:
@@ -1206,6 +1274,7 @@ def project_detail(slug):
         db.close()
 
 @app.post("/projects/<slug>/status")
+@login_required
 def project_update_status(slug):
     new_status = request.form.get("status", "").strip()
     db = SessionLocal()
@@ -1240,6 +1309,7 @@ def project_update_status(slug):
         db.close()
 
 @app.post("/projects/<slug>/notes/add")
+@login_required
 def project_add_note(slug):
     title = (request.form.get("title", "").strip())
     body  = (request.form.get("body", "").strip() or None)
@@ -1264,6 +1334,7 @@ def project_add_note(slug):
 
 # Sort All Projects by status: Active, Planned, Completed
 @app.get("/projects")
+@login_required
 def projects_index():
     db = SessionLocal()
     try:
@@ -1279,10 +1350,12 @@ def projects_index():
         db.close()
 
 @app.get("/projects/new")
+@login_required
 def projects_new():
     return render_template("projects_new.html")
 
 @app.post("/projects/new")
+@login_required
 def projects_create():
     name = (request.form.get("name", "").strip())
     slug = (request.form.get("slug", "").strip()) or _slugify(name)
@@ -1387,6 +1460,7 @@ def send_alerts(force: bool, signal_group: str | None):
             db.close()
 
 @app.post("/projects/<slug>/deadline")
+@login_required
 def project_update_deadline(slug):
     db = SessionLocal()
     try:
@@ -1403,6 +1477,7 @@ def project_update_deadline(slug):
         db.close()
 
 @app.route("/project/<int:pid>/export.pdf")
+@login_required
 def project_export_pdf(pid):
     db = SessionLocal()
     try:
@@ -1444,6 +1519,7 @@ def project_export_pdf(pid):
         db.close()
 
 @app.get("/workbench")
+@login_required
 def workbench_index():
     db = SessionLocal()
     try:
@@ -1453,6 +1529,7 @@ def workbench_index():
         db.close()
 
 @app.route("/workbench/upload", methods=["GET", "POST"])
+@login_required
 def workbench_upload():
     if request.method == "POST":
         f = request.files.get("file")
@@ -1565,6 +1642,7 @@ def workbench_upload():
             db.close()
 
 @app.get("/workbench/<int:ds_id>")
+@login_required
 def workbench_view(ds_id):
     import csv
     db = SessionLocal()
@@ -1705,6 +1783,7 @@ def workbench_view(ds_id):
         db.close()
 
 @app.post("/workbench/<int:ds_id>/project")
+@login_required
 def workbench_set_project(ds_id: int):
     db = SessionLocal()
     try:
@@ -1730,6 +1809,7 @@ def workbench_set_project(ds_id: int):
         db.close()
 
 @app.get("/workbench/<int:ds_id>/export.csv")
+@login_required
 def workbench_export_csv(ds_id: int):
     import csv
     from io import StringIO
@@ -1801,6 +1881,7 @@ def workbench_export_csv(ds_id: int):
         db.close()
 
 @app.post("/workbench/<int:ds_id>/scan_pdfs")
+@login_required
 def workbench_scan_pdfs(ds_id: int):
     """
     Scan PDFs for occurrences of keys from the dataset's group_by column.

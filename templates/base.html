@@ -67,7 +67,14 @@
             </ul>
           </li>
         </ul>
-        <a href="{{ url_for('calendar.calendar_all') }}">Calendar (.ics)</a>
+        </div class="d-flex align-items-center gap-2">
+          <a href="{{ url_for('calendar.calendar_all') }}">Calendar (.ics)</a>
+          {% if current_user.is_authenticated %}
+            <a class="btn btn-sm btn-outline-light" href="{{ url_for('auth.logout') }}">Logout</a>
+          {% else %}
+            <a class="btn btn-sm btn-outline-light" href="{{ url_for('auth.login') }}">Login</a>
+          {% endif %}
+        </div>
         <!-- (Optional) right-side slot for future controls/search -->
         <!-- <form class="d-flex" method="get" action="{{ url_for('home') }}">
           <input class="form-control me-2" type="search" name="q" placeholder="Search…" value="{{ request.args.get('q','') }}">
