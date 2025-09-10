@@ -19,4 +19,4 @@ gunicorn>=22.0
 requests
 python-dotenv
 click
-numpy>=2.1f
+numpy>=2.1
