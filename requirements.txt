@@ -13,9 +13,10 @@ google-api-python-client==2.136.0
 google-auth==2.33.0
 google-auth-oauthlib==1.2.1
 python-dateutil==2.9.0.post0
-pandas==2.2.2
+pandas>=2.2.3
 pdfminer.six
 gunicorn>=22.0
 requests
 python-dotenv
 click
+numpy>=2.1f
