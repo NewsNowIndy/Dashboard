@@ -9,7 +9,7 @@ export SIGNAL_CLI_CONFIG="${SIGNAL_CLI_CONFIG:-/var/foia/signal-cli}"
 mkdir -p /var/foia/media /var/foia/signal-cli
 mkdir -p "$PROJECT_ROOT/bin"
 
-# If signal-cli isn’t present, fetch the native binary (no Java needed)
+# If signal-cli isn’t present, fetch native binary (no Java needed)
 if ! command -v signal-cli >/dev/null 2>&1; then
   SIGCLI_VER=0.13.1
   curl -fsSL -o "$PROJECT_ROOT/bin/signal-cli" "https://github.com/AsamK/signal-cli/releases/download/v${SIGCLI_VER}/signal-cli-native-${SIGCLI_VER}-linux-amd64"
