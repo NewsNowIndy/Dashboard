@@ -107,6 +107,27 @@ os.makedirs(Config.WORKBENCH_DIR, exist_ok=True)
 # Helpers
 # -----------------------------
 
+@app.cli.command("signal-env")
+def signal_env():
+    """Print what the Flask process sees for Java and signal-cli."""
+    import os, shutil, subprocess
+    print("JAVA_HOME:", os.environ.get("JAVA_HOME"))
+    print("which java:", shutil.which("java"))
+    print("which signal-cli:", shutil.which("signal-cli"))
+    try:
+        v = subprocess.run(["java","-version"], capture_output=True, text=True)
+        print("java -version:\n", (v.stderr or v.stdout))
+    except Exception as e:
+        print("java -version error:", e)
+
+@app.cli.command("signal-test-doc")
+@click.argument("doc_id", type=int)
+@click.option("--project-id", type=int, default=None)
+def signal_test_doc(doc_id, project_id):
+    """Emit a document.uploaded event to test Signal."""
+    emit("document.uploaded", doc_id=doc_id, project_id=project_id)
+    print("Emitted document.uploaded for", doc_id, "project_id=", project_id)
+
 @app.cli.command("create-user")
 @click.argument("email")
 @click.argument("password")
@@ -1064,6 +1085,9 @@ def project_mcpo_upload():
     os.makedirs(dest_dir, exist_ok=True)
 
     db = SessionLocal()
+    # NEW: collect events to fire after commit
+    pending_events = []
+
     try:
         # Help avoid transient writer conflicts on SQLite
         try:
@@ -1122,7 +1146,7 @@ def project_mcpo_upload():
                         try:
                             size = os.path.getsize(stored_path)
                         except Exception:
-                            size = size
+                            pass
                         # normalize mime
                         mime = "application/pdf"
                 except Exception:
@@ -1160,16 +1184,24 @@ def project_mcpo_upload():
                 except Exception:
                     app.logger.exception("FTS index insert failed for doc_id=%s", doc.id)
 
-            # Emit "document.uploaded" (resolve project_id from slug)
+            # NEW: queue Signal event; we will emit AFTER commit
             try:
                 proj_id = db.query(Project.id).filter(Project.slug == doc.project_slug).scalar()
-                emit("document.uploaded", doc_id=doc.id, project_id=proj_id)
+                pending_events.append(("document.uploaded", {"doc_id": doc.id, "project_id": proj_id}))
             except Exception:
-                app.logger.exception("emit(document.uploaded) failed for doc_id=%s", doc.id)
+                app.logger.exception("queue(document.uploaded) failed for doc_id=%s", doc.id)
 
+        # commit all DB work first, then fire events
         db.commit()
     finally:
         db.close()
+
+    # Fire queued events AFTER the data is committed/visible to listener sessions
+    for name, payload in pending_events:
+        try:
+            emit(name, **payload)
+        except Exception:
+            app.logger.exception("emit(%s) failed payload=%r", name, payload)
 
     msg = []
     if uploaded:

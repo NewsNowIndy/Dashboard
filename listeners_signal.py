@@ -1,9 +1,11 @@
 # listeners_signal.py
+# pyright: reportUnusedFunction=false
 import os
+from urllib.parse import urljoin
 from datetime import datetime
 from sqlalchemy import text
 from config import Config
-from models import SessionLocal, Project, FoiaRequest, ProjectDocument, WorkbenchDataset, MediaItem
+from models import SessionLocal, Project, FoiaRequest, ProjectDocument, WorkbenchDataset, MediaItem, FoiaRequest
 from utils_signal import send_signal_group  # you already use this in send-alerts
 from events import on  # if your events.py lacks @on, see the NOTE below
 
@@ -13,78 +15,99 @@ GROUP_ID = os.getenv("SIGNAL_GROUP_ID")  # <-- set this in Render/your env
 def _p(s: str) -> str:
     return s.replace("\n", " ").strip()
 
-def _link(path: str) -> str:
-    return f"{APP_BASE.rstrip('/')}/{path.lstrip('/')}"
+def _abs(path: str) -> str:
+    return urljoin(APP_BASE, path.lstrip("/"))
 
-def _send(msg: str):
-    if not GROUP_ID:
-        return  # silently no-op if not configured
+def _group_id() -> str | None:
+    return os.getenv("SIGNAL_GROUP_ID", getattr(Config, "SIGNAL_GROUP_ID", None))
+
+def _send(text: str) -> None:
+    gid = _group_id()
+    if not gid:
+        print("[signal] No SIGNAL_GROUP_ID set; skipping send. Message was:\n", text)
+        return
     try:
-        send_signal_group(GROUP_ID, msg)
-    except Exception:
-        # avoid crashing the request; logs will show traceback
-        import traceback; traceback.print_exc()
+        send_signal_group(gid, text)
+        print("[signal] sent to group:", gid)
+    except Exception as e:
+        print("[signal] ERROR sending to Signal:", e)
 
+# --- Document uploaded ---
+@on("document.uploaded")
+def _on_doc_uploaded(_name, doc_id: int, project_id: int | None = None):
+    db = SessionLocal()
+    try:
+        d = db.get(ProjectDocument, doc_id)
+
+        # resolve project whether d exists or not
+        if project_id:
+            p = db.get(Project, project_id)
+        else:
+            p = db.query(Project).filter(Project.slug == (d.project_slug if d else None)).first() if d else None
+
+        # SAFE title computation (don't touch attributes if d is None)
+        title = f"doc #{doc_id}"
+        if d:
+            title = (d.title or d.filename or title)
+
+        p_name = f" ({p.name})" if p else ""
+        url = _abs(f"projects/{p.slug}") if p else APP_BASE
+
+        _send(f"📄 New document{p_name}: {title}\n{url}")
+    finally:
+        db.close()
+
+# --- Project status changed ---
 @on("project.status_changed")
-def _project_status_changed(_, project_id: int, old: str, new: str):
+def _on_project_status(_name, project_id: int, old: str, new: str):
     db = SessionLocal()
     try:
         p = db.get(Project, project_id)
         if not p: return
-        url = _link(f"projects/{p.slug}")
-        _send(_p(f"🧭 Project status: “{p.name}” → {old} ➜ {new}\n{url}"))
+        url = _abs(f"projects/{p.slug}")
+        _send(f"📌 Project status: {p.name} — {old} → {new}\n{url}")
     finally:
         db.close()
 
+# --- FOIA status changed ---
 @on("foia.status_changed")
-def _foia_status_changed(_, foia_request_id: int, old: str, new: str):
+def _on_foia_status(_name, foia_request_id: int, old: str, new: str):
     db = SessionLocal()
     try:
         r = db.get(FoiaRequest, foia_request_id)
         if not r: return
-        ref = r.reference_number or f"FOIA #{r.id}"
-        url = _link(f"requests/{r.id}")
-        agency = f" ({r.agency})" if r.agency else ""
-        _send(_p(f"📄 FOIA status: {ref}{agency} → {old} ➜ {new}\n{url}"))
+        proj = db.get(Project, r.project_id) if r.project_id else None
+        p_name = f" ({proj.name})" if proj else ""
+        url = _abs(f"requests/{r.id}")
+        ref = r.reference_number or f"Request #{r.id}"
+        _send(f"📬 FOIA status{p_name}: {ref} — {old} → {new}\n{url}")
     finally:
         db.close()
 
-@on("document.uploaded")
-def _document_uploaded(_, doc_id: int, project_id: int | None = None):
-    db = SessionLocal()
-    try:
-        d = db.get(ProjectDocument, doc_id)
-        if not d: return
-        proj = db.query(Project).filter(Project.id == project_id).first() if project_id else \
-               db.query(Project).filter(Project.slug == d.project_slug).first()
-        p_name = proj.name if proj else d.project_slug
-        url = _link(f"projects/{proj.slug if proj else d.project_slug}")
-        _send(_p(f"📎 New document in “{p_name}”: {d.title or d.filename}\n{url}"))
-    finally:
-        db.close()
-
+# --- Workbench dataset created ---
 @on("workbench.dataset_created")
-def _dataset_created(_, dataset_id: int, project_id: int | None = None):
+def _on_dataset_created(_name, dataset_id: int, project_id: int | None = None):
     db = SessionLocal()
     try:
         ds = db.get(WorkbenchDataset, dataset_id)
-        if not ds: return
         proj = db.get(Project, project_id) if project_id else None
-        p_label = f" (Project: {proj.name})" if proj else ""
-        url = _link(f"workbench/{ds.id}")
-        _send(_p(f"🧮 New workbench dataset: {ds.name}{p_label}\n{url}"))
+        p_name = f" ({proj.name})" if proj else ""
+        url = _abs(f"workbench/{ds.id}") if ds else APP_BASE
+        _send(f"🧮 New dataset{p_name}: {ds.name if ds else f'#{dataset_id}'}\n{url}")
     finally:
         db.close()
 
+print("[signal] listeners_signal loaded; APP_BASE =", APP_BASE)
+
 @on("media.transcribed")
-def _media_transcribed(_, media_id: int, project_id: int | None = None):
+def _on_media_transcribed(_, media_id: int, project_id: int | None = None):
     db = SessionLocal()
     try:
         m = db.get(MediaItem, media_id)
         if not m: return
         proj = db.get(Project, project_id) if project_id else m.project
         p_name = f" ({proj.name})" if proj else ""
-        url = _link(f"media/{m.id}")
+        url = _abs(f"media/{m.id}")
         _send(f"🎙️ New transcript{p_name}: {m.title or m.filename}\n{url}")
     finally:
         db.close()

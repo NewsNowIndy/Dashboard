@@ -354,3 +354,15 @@
     .card canvas { height: 240px; }
   }
   
+  /* Flash banner legibility */
+.alert, .alert * { color: #000 !important; }
+
+/* Softer backgrounds for common alert variants */
+.alert-primary  { background-color: #e9f2ff !important; border-color: #cfe2ff !important; }
+.alert-success  { background-color: #e8f7ee !important; border-color: #d1e7dd !important; }
+.alert-warning  { background-color: #fff3cd !important; border-color: #ffe69c !important; }
+.alert-danger   { background-color: #fdecea !important; border-color: #f5c2c7 !important; }
+.alert-secondary{ background-color: #f1f3f5 !important; border-color: #dee2e6 !important; }
+
+/* Make the close button visible on light backgrounds */
+.btn-close { filter: none !important; }
