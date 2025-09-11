@@ -4,26 +4,19 @@ set -euxo pipefail
 export PROJECT_ROOT="/opt/render/project/src"
 export SIGNAL_CLI_CONFIG="${SIGNAL_CLI_CONFIG:-/var/foia/signal-cli}"
 
-# Prefer the venv that actually has gunicorn
-VENV_CANDIDATES=(
-  "/opt/render/project/.venv"
-  "/opt/render/project/src/.venv"
-)
-
-choose_python() {
-  for v in "${VENV_CANDIDATES[@]}"; do
-    if [ -x "$v/bin/python" ]; then
-      if "$v/bin/python" -c 'import importlib.util as iu, sys; sys.exit(0 if iu.find_spec("gunicorn") else 1)'; then
-        echo "$v/bin/python"
-        return 0
-      fi
+# Prefer a real venv; try both common Render locations, then fall back to system python3
+pick_python() {
+  for v in "/opt/render/project/.venv/bin/python" "/opt/render/project/src/.venv/bin/python" "/usr/bin/python3"; do
+    if [ -x "$v" ]; then
+      echo "$v"
+      return 0
     fi
   done
-  # fallback to whatever python is on PATH (shouldn’t happen)
+  # last resort
   command -v python
 }
 
-PYBIN="$(choose_python)"
+PYBIN="$(pick_python)"
 export PATH="$(dirname "$PYBIN"):$PROJECT_ROOT/bin:$PATH"
 
 # Ensure persistent dirs
@@ -44,18 +37,25 @@ if ! command -v signal-cli >/dev/null 2>&1; then
   ln -sf "$dest_dir/bin/signal-cli" "$PROJECT_ROOT/bin/signal-cli"
 fi
 
-# Quick visibility
+# --- Ensure gunicorn is available in the chosen interpreter (quick install if missing) ---
+"$PYBIN" - <<'PY' || true
+import importlib.util as iu, sys, subprocess
+if iu.find_spec("gunicorn") is None:
+    subprocess.check_call([sys.executable, "-m", "pip", "install", "--no-cache-dir", "gunicorn>=22.0"])
+PY
+
+# Quick visibility (non-fatal)
 which python || true
 python -c 'import sys; print("python:", sys.executable)' || true
 which ffmpeg || true
 which signal-cli || true
 python - <<'PY' || true
 import importlib.util as iu
-def ok(m): return iu.find_spec(m) is not None
-print("gunicorn:", "ok" if ok("gunicorn") else "missing")
-print("whisper:",  "ok" if ok("whisper")  else "missing")
-print("torch:",    "ok" if ok("torch")    else "missing")
+chk=lambda m: "ok" if iu.find_spec(m) else "missing"
+print("gunicorn:", chk("gunicorn"))
+print("whisper:",  chk("whisper"))
+print("torch:",    chk("torch"))
 PY
 
-# Launch the app from the venv that has gunicorn
+# Bind to the provided $PORT so Render's port scan passes
 exec "$PYBIN" -m gunicorn app:app --bind "0.0.0.0:${PORT}"
