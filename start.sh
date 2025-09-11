@@ -11,12 +11,10 @@ mkdir -p /var/foia/media /var/foia/signal-cli
 which ffmpeg || true
 which signal-cli || true
 python - <<'PY' || true
-import importlib, sys
-def check(m):
-    spec = importlib.util.find_spec(m)
-    print(f"{m}: {'ok' if spec else 'missing'}")
-check("torch")
-check("whisper")
+import pkgutil
+def chk(m): print(f"{m}:", "ok" if pkgutil.find_loader(m) else "missing")
+chk("torch")
+chk("whisper")
 PY
 
 exec gunicorn app:app --bind "0.0.0.0:${PORT}"
