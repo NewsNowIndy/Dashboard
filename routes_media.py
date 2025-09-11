@@ -1,13 +1,12 @@
 # routes_media.py
-import io, os, json, tempfile, subprocess, mimetypes
+import io, os, json, tempfile, subprocess, mimetypes, shutil
 from datetime import datetime
 from flask import Blueprint, render_template, request, redirect, url_for, flash, send_file, current_app
-from flask_login import login_required
+from flask_login import login_required, current_user
 from werkzeug.utils import secure_filename
 from sqlalchemy import text
 from config import Config
 from models import SessionLocal, MediaItem, Project
-from search_text import extract_pdf_text  # not used here but keeping pattern
 from events import emit
 
 bp = Blueprint("media", __name__)
@@ -18,44 +17,84 @@ def _guess_mime(path):
     mt, _ = mimetypes.guess_type(path)
     return mt or "application/octet-stream"
 
-def _index_av_fts(conn, media_id: int, title: str, body: str):
-    conn.execute(text("DELETE FROM av_fts WHERE media_id=:i"), {"i": media_id})
-    conn.execute(text("INSERT INTO av_fts (media_id, title, body) VALUES (:i,:t,:b)"),
-                 {"i": media_id, "t": title or "", "b": body or ""})
+def _ensure_ffmpeg():
+    """Make sure ffmpeg is available before trying to transcribe."""
+    ffmpeg = shutil.which("ffmpeg")
+    if not ffmpeg:
+        raise RuntimeError(
+            "ffmpeg not found on PATH. Ensure your Render Start Command exports "
+            "$PROJECT_ROOT/bin to PATH and that the build step downloaded ffmpeg."
+        )
+    return ffmpeg
 
 def _transcribe(path: str):
     """
-    Try faster-whisper; fall back to openai-whisper CLI if available.
-    Returns (full_text, segments:list[{start,end,text}], duration_seconds or None)
+    Try faster-whisper first (if installed), then openai-whisper.
+    Returns (full_text:str, segments:list[{start,end,text}], duration_seconds:int|None)
     """
-    # 1) faster-whisper (pip install faster-whisper)
-    try:
-        from faster_whisper import WhisperModel
-        model_size = os.getenv("TRANSCRIBE_MODEL", "base")
-        model = WhisperModel(model_size, compute_type=os.getenv("WHISPER_COMPUTE", "int8"))
-        segments, info = model.transcribe(path, vad_filter=True, vad_parameters=dict(min_silence_duration_ms=500))
-        segs = []
-        texts = []
-        for s in segments:
-            segs.append({"start": float(s.start or 0), "end": float(s.end or 0), "text": s.text or ""})
-            if s.text: texts.append(s.text.strip())
-        return " ".join(texts).strip(), segs, int(info.duration) if getattr(info, "duration", None) else None
-    except Exception:
-        pass
+    _ensure_ffmpeg()
 
-    # 2) openai-whisper (pip install -U openai-whisper ffmpeg)
-    try:
-        import whisper
-        model = whisper.load_model(os.getenv("TRANSCRIBE_MODEL", "base"))
-        result = model.transcribe(path, word_timestamps=False, verbose=False)
-        text = (result.get("text") or "").strip()
-        segs = [{"start": float(s.get("start", 0.0)),
-                 "end": float(s.get("end", 0.0)),
-                 "text": s.get("text","")} for s in (result.get("segments") or [])]
-        dur = int(result.get("duration")) if result.get("duration") else None
-        return text, segs, dur
-    except Exception as e:
-        raise RuntimeError(f"Transcription failed: {e}")
+    backend = (os.getenv("TRANSCRIBE_BACKEND", "auto") or "auto").lower()
+    want_faster = backend in ("auto", "faster")
+    want_whisper = backend in ("auto", "whisper")
+
+    # 1) faster-whisper
+    if want_faster:
+        try:
+            from faster_whisper import WhisperModel
+            model_size = os.getenv("TRANSCRIBE_MODEL", "base")
+            compute = os.getenv("WHISPER_COMPUTE", "int8")  # good CPU default
+            model = WhisperModel(model_size, compute_type=compute)
+            segments, info = model.transcribe(
+                path,
+                vad_filter=True,
+                vad_parameters=dict(min_silence_duration_ms=500)
+            )
+            segs, texts = [], []
+            for s in segments:
+                segs.append({
+                    "start": float(s.start or 0.0),
+                    "end": float(s.end or 0.0),
+                    "text": (s.text or "").strip(),
+                })
+                if s.text:
+                    texts.append(s.text.strip())
+            full = " ".join(texts).strip()
+            dur = int(getattr(info, "duration", 0)) or None
+            return full, segs, dur
+        except ModuleNotFoundError:
+            # Not installed — fall through
+            pass
+        except Exception as e:
+            # If user explicitly demanded faster, fail; otherwise fall through.
+            if backend == "faster":
+                raise RuntimeError(f"Transcription (faster-whisper) failed: {e}")
+
+    # 2) openai-whisper
+    if want_whisper:
+        try:
+            import whisper
+            model_name = os.getenv("TRANSCRIBE_MODEL", "base")
+            model = whisper.load_model(model_name)
+            result = model.transcribe(path, word_timestamps=False, verbose=False)
+            text = (result.get("text") or "").strip()
+            segs = [
+                {
+                    "start": float(s.get("start", 0.0)),
+                    "end": float(s.get("end", 0.0)),
+                    "text": (s.get("text") or "").strip(),
+                }
+                for s in (result.get("segments") or [])
+            ]
+            dur = result.get("duration")
+            dur = int(dur) if isinstance(dur, (int, float)) else None
+            return text, segs, dur
+        except ModuleNotFoundError as e:
+            raise RuntimeError("Transcription failed: 'whisper' is not installed") from e
+        except Exception as e:
+            raise RuntimeError(f"Transcription (openai-whisper) failed: {e}")
+
+    raise RuntimeError("Transcription failed: no working backend (install faster-whisper and/or openai-whisper)")
 
 @bp.get("/media")
 @login_required
@@ -96,7 +135,7 @@ def upload():
         flash("Unsupported media type.")
         return redirect(url_for("media.upload"))
 
-    dest_dir = os.path.join(Config.DATA_DIR, "media")
+    dest_dir = os.path.join(getattr(Config, "DATA_DIR", "/var/foia"), "media")
     os.makedirs(dest_dir, exist_ok=True)
     filename = secure_filename(f.filename)
     path = os.path.join(dest_dir, filename)
@@ -108,7 +147,12 @@ def upload():
         i += 1
     f.save(path)
 
-    full_text, segments, duration = _transcribe(path)
+    try:
+        full_text, segments, duration = _transcribe(path)
+    except Exception as e:
+        current_app.logger.exception("Transcription error")
+        flash(str(e))
+        return redirect(url_for("media.upload"))
 
     db = SessionLocal()
     try:
@@ -119,7 +163,7 @@ def upload():
             stored_path=path,
             mime_type=_guess_mime(path),
             duration_seconds=duration,
-            transcript_text=full_text,
+            transcript_text=full_text or "",
             transcript_json=json.dumps(segments or []),
         )
         db.add(item); db.flush()  # get item.id
@@ -131,7 +175,7 @@ def upload():
 
         db.commit()
 
-        # optional: emit an event
+        # Event for listeners (Signal, etc.)
         try:
             emit("media.transcribed", media_id=item.id, project_id=item.project_id)
         except Exception:
@@ -139,10 +183,10 @@ def upload():
 
         flash("Media uploaded and transcribed.")
         return redirect(url_for("media.view", media_id=item.id))
-    except Exception as e:
+    except Exception:
         db.rollback()
         current_app.logger.exception("Media upload/transcribe failed")
-        flash(f"Upload failed: {e}")
+        flash("Upload failed. See logs for details.")
         return redirect(url_for("media.upload"))
     finally:
         db.close()
@@ -150,7 +194,6 @@ def upload():
 @bp.get("/media/<int:media_id>")
 @login_required
 def view(media_id):
-    import json
     db = SessionLocal()
     try:
         m = db.get(MediaItem, media_id)
@@ -158,14 +201,12 @@ def view(media_id):
             flash("Media not found.")
             return redirect(url_for("media.index"))
 
-        segs = []
         try:
             segs = json.loads(m.transcript_json or "[]")
         except Exception:
             segs = []
 
         projects = db.query(Project).order_by(Project.name.asc()).all()
-
         return render_template("media_view.html", m=m, segments=segs, projects=projects)
     finally:
         db.close()

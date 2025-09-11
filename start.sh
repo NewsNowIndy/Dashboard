@@ -7,14 +7,16 @@ export SIGNAL_CLI_CONFIG="${SIGNAL_CLI_CONFIG:-/var/foia/signal-cli}"
 
 mkdir -p /var/foia/media /var/foia/signal-cli
 
-# quick sanity checks (won’t fail the boot if signal-cli missing)
-which ffmpeg
+# quick sanity checks (non-fatal)
+which ffmpeg || true
 which signal-cli || true
-python - <<'PY'
-import torch
-import importlib
-print("torch:", torch.__version__)
-print("whisper:", "ok" if importlib.util.find_spec("whisper") else "missing")
+python - <<'PY' || true
+import importlib, sys
+def check(m):
+    spec = importlib.util.find_spec(m)
+    print(f"{m}: {'ok' if spec else 'missing'}")
+check("torch")
+check("whisper")
 PY
 
 exec gunicorn app:app --bind "0.0.0.0:${PORT}"
