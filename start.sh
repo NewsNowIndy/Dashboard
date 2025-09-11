@@ -2,16 +2,40 @@
 set -euxo pipefail
 
 export PROJECT_ROOT="/opt/render/project/src"
-export VENV_DIR="/opt/render/project/src/.venv"     # <-- correct venv location
-export PATH="$VENV_DIR/bin:$PROJECT_ROOT/bin:$PATH" # venv first
-
 export SIGNAL_CLI_CONFIG="${SIGNAL_CLI_CONFIG:-/var/foia/signal-cli}"
+
+# Prefer the venv that actually has gunicorn
+VENV_CANDIDATES=(
+  "/opt/render/project/.venv"
+  "/opt/render/project/src/.venv"
+)
+
+choose_python() {
+  for v in "${VENV_CANDIDATES[@]}"; do
+    if [ -x "$v/bin/python" ]; then
+      if "$v/bin/python" - <<'PY' >/dev/null 2>&1; then
+        echo "$v/bin/python"
+        return 0
+      fi
+    fi
+  done
+  # fallback to whatever python is on PATH (shouldn’t happen)
+  command -v python
+}
+# Tiny Python that exits 0 only if gunicorn is importable
+read -r -d '' PY <<'PY'
+import importlib.util as iu, sys
+sys.exit(0 if iu.find_spec("gunicorn") else 1)
+PY
+
+PYBIN="$(choose_python)"
+export PATH="$(dirname "$PYBIN"):$PROJECT_ROOT/bin:$PATH"
 
 # Ensure persistent dirs
 mkdir -p /var/foia/media /var/foia/signal-cli
 mkdir -p "$PROJECT_ROOT/bin"
 
-# If signal-cli isn’t present, fetch the Linux-native tarball and extract it
+# If signal-cli isn’t present, fetch Linux-native tarball and extract it
 if ! command -v signal-cli >/dev/null 2>&1; then
   SIGCLI_VER="${SIGCLI_VER:-0.13.18}"
   TARBALL="signal-cli-${SIGCLI_VER}-Linux-native.tar.gz"
@@ -25,7 +49,7 @@ if ! command -v signal-cli >/dev/null 2>&1; then
   ln -sf "$dest_dir/bin/signal-cli" "$PROJECT_ROOT/bin/signal-cli"
 fi
 
-# Quick checks (non-fatal)
+# Quick visibility
 which python || true
 python -c 'import sys; print("python:", sys.executable)' || true
 which ffmpeg || true
@@ -38,5 +62,5 @@ print("whisper:",  "ok" if ok("whisper")  else "missing")
 print("torch:",    "ok" if ok("torch")    else "missing")
 PY
 
-# Start your app (bind to $PORT). Using -m ensures the venv's gunicorn module is used.
-exec python -m gunicorn app:app --bind "0.0.0.0:${PORT}"
+# Launch the app from the venv that has gunicorn
+exec "$PYBIN" -m gunicorn app:app --bind "0.0.0.0:${PORT}"
