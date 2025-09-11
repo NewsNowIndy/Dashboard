@@ -2,32 +2,31 @@
 set -euxo pipefail
 
 export PROJECT_ROOT="/opt/render/project/src"
-export PATH="$PROJECT_ROOT/bin:$PATH"
+export VENV_DIR="/opt/render/project/.venv"      # <-- Render's venv
+export PATH="$PROJECT_ROOT/bin:$VENV_DIR/bin:$PATH"
 export SIGNAL_CLI_CONFIG="${SIGNAL_CLI_CONFIG:-/var/foia/signal-cli}"
 
 # Ensure persistent dirs
 mkdir -p /var/foia/media /var/foia/signal-cli
 mkdir -p "$PROJECT_ROOT/bin"
 
-# --- If signal-cli isn’t present, fetch the Linux-native tarball and extract it
+# If signal-cli isn’t present, fetch the Linux-native tarball and extract it
 if ! command -v signal-cli >/dev/null 2>&1; then
-  SIGCLI_VER="${SIGCLI_VER:-0.13.18}"   # you can set SIGCLI_VER in Render env; defaults to 0.13.18
+  SIGCLI_VER="${SIGCLI_VER:-0.13.18}"
   TARBALL="signal-cli-${SIGCLI_VER}-Linux-native.tar.gz"
   BASE_URL="https://github.com/AsamK/signal-cli/releases/download/v${SIGCLI_VER}"
-
   tmp="/tmp/${TARBALL}"
   dest_dir="$PROJECT_ROOT/signal-cli-${SIGCLI_VER}"
   rm -rf "$dest_dir"
   mkdir -p "$dest_dir" "$PROJECT_ROOT/bin"
-
   curl -fsSL -o "$tmp" "${BASE_URL}/${TARBALL}"
   tar -C "$dest_dir" --strip-components=1 -xzf "$tmp"
-
-  # symlink into $PROJECT_ROOT/bin so utils_signal._signal_bin() picks it up
   ln -sf "$dest_dir/bin/signal-cli" "$PROJECT_ROOT/bin/signal-cli"
 fi
 
 # Quick checks (non-fatal)
+which python || true
+python -c 'import sys; print("python:", sys.executable)' || true
 which ffmpeg || true
 which signal-cli || true
 python - <<'PY' || true
@@ -38,5 +37,5 @@ print("whisper:",  "ok" if ok("whisper")  else "missing")
 print("torch:",    "ok" if ok("torch")    else "missing")
 PY
 
-# Start your app (must bind 0.0.0.0:$PORT)
-exec gunicorn app:app --bind "0.0.0.0:${PORT}"
+# Start your app (explicit gunicorn path for clarity)
+exec "$VENV_DIR/bin/gunicorn" app:app --bind "0.0.0.0:${PORT}"
