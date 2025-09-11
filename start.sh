@@ -13,7 +13,7 @@ VENV_CANDIDATES=(
 choose_python() {
   for v in "${VENV_CANDIDATES[@]}"; do
     if [ -x "$v/bin/python" ]; then
-      if "$v/bin/python" - <<'PY' >/dev/null 2>&1; then
+      if "$v/bin/python" -c 'import importlib.util as iu, sys; sys.exit(0 if iu.find_spec("gunicorn") else 1)'; then
         echo "$v/bin/python"
         return 0
       fi
@@ -22,11 +22,6 @@ choose_python() {
   # fallback to whatever python is on PATH (shouldn’t happen)
   command -v python
 }
-# Tiny Python that exits 0 only if gunicorn is importable
-read -r -d '' PY <<'PY'
-import importlib.util as iu, sys
-sys.exit(0 if iu.find_spec("gunicorn") else 1)
-PY
 
 PYBIN="$(choose_python)"
 export PATH="$(dirname "$PYBIN"):$PROJECT_ROOT/bin:$PATH"
