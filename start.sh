@@ -2,8 +2,9 @@
 set -euxo pipefail
 
 export PROJECT_ROOT="/opt/render/project/src"
-export VENV_DIR="/opt/render/project/.venv"      # <-- Render's venv
-export PATH="$PROJECT_ROOT/bin:$VENV_DIR/bin:$PATH"
+export VENV_DIR="/opt/render/project/src/.venv"     # <-- correct venv location
+export PATH="$VENV_DIR/bin:$PROJECT_ROOT/bin:$PATH" # venv first
+
 export SIGNAL_CLI_CONFIG="${SIGNAL_CLI_CONFIG:-/var/foia/signal-cli}"
 
 # Ensure persistent dirs
@@ -37,5 +38,5 @@ print("whisper:",  "ok" if ok("whisper")  else "missing")
 print("torch:",    "ok" if ok("torch")    else "missing")
 PY
 
-# Start your app (explicit gunicorn path for clarity)
-exec "$VENV_DIR/bin/gunicorn" app:app --bind "0.0.0.0:${PORT}"
+# Start your app (bind to $PORT). Using -m ensures the venv's gunicorn module is used.
+exec python -m gunicorn app:app --bind "0.0.0.0:${PORT}"
