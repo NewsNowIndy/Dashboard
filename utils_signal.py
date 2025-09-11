@@ -2,13 +2,31 @@
 import os
 import shutil
 import subprocess
-from config import Config  # make sure this exists in your project
 
-def _java21_env() -> dict:
-    """Return an env that guarantees Java 21 is used."""
+def _signal_bin() -> str:
+    """
+    Resolve the signal-cli binary. Prefer explicit env, then local ./bin, then PATH.
+    """
+    explicit = os.getenv("SIGNAL_CLI_BIN")
+    if explicit:
+        return explicit
+    here_bin = os.path.join(os.getenv("PROJECT_ROOT", "/opt/render/project/src"), "bin", "signal-cli")
+    if os.path.exists(here_bin):
+        return here_bin
+    found = shutil.which("signal-cli")
+    if found:
+        return found
+    raise FileNotFoundError("signal-cli not found. Install a native binary in ./bin or set SIGNAL_CLI_BIN.")
+
+def _signal_env() -> dict:
+    """
+    Return an environment for running signal-cli. By default we don't force Java;
+    native binaries don't need it. If you must use the Java version, set SIGNAL_CLI_USE_JAVA=1.
+    """
     env = os.environ.copy()
-
-    # If current java is already 21, keep it.
+    if not os.getenv("SIGNAL_CLI_USE_JAVA"):
+        return env  # native or PATH-provided binary
+    # (Optional) try to pin Java 21 for Java version only installs
     try:
         check = subprocess.run(["java", "-version"], capture_output=True, text=True)
         banner = (check.stderr or check.stdout or "")
@@ -16,50 +34,34 @@ def _java21_env() -> dict:
             return env
     except Exception:
         pass
-
-    # Try mac helper
-    try:
-        home = subprocess.check_output(["/usr/libexec/java_home", "-v", "21"], text=True).strip()
-        env["JAVA_HOME"] = home
-        env["PATH"] = f"{home}/bin:" + env.get("PATH", "")
-        return env
-    except Exception:
-        pass
-
-    # Common Homebrew locations (Apple Silicon / Intel)
-    candidates = [
+    for p in (
         "/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home",
         "/Library/Java/JavaVirtualMachines/temurin-21.jdk/Contents/Home",
-    ]
-    for p in candidates:
+    ):
         if os.path.exists(p):
             env["JAVA_HOME"] = p
             env["PATH"] = f"{p}/bin:" + env.get("PATH", "")
             break
-
     return env
 
 def send_signal_group(group_id: str, text: str) -> None:
     """
-    Send a message to a Signal v2 group using signal-cli.
+    Send a message to a Signal v2 group using signal-cli (native preferred).
     Raises on ANY failure so callers can log errors clearly.
     """
-    # Accept either SIGNAL_NUMBER (preferred) or SIGNAL_ACCOUNT (your shell test)
     number = (
         os.getenv("SIGNAL_NUMBER")
         or os.getenv("SIGNAL_ACCOUNT")
-        or getattr(Config, "SIGNAL_NUMBER", None)
     )
     if not number:
         raise RuntimeError("SIGNAL_NUMBER (or SIGNAL_ACCOUNT) is not set")
 
-    signal_bin = os.getenv("SIGNAL_CLI_BIN") or shutil.which("signal-cli") or "signal-cli"
-    cmd = [signal_bin, "-u", number, "send", "-g", group_id, "-m", text]
+    cfg = os.getenv("SIGNAL_CLI_CONFIG", "/var/foia/signal-cli")
+    os.makedirs(cfg, exist_ok=True)
 
-    env = _java21_env()
-    res = subprocess.run(cmd, capture_output=True, text=True, env=env)
+    cmd = [_signal_bin(), "--config", cfg, "-u", number, "send", "-g", group_id, "-m", text]
+    res = subprocess.run(cmd, capture_output=True, text=True, env=_signal_env())
 
-    # signal-cli prints to stdout/stderr; treat non-zero as failure
     if res.returncode != 0:
         err = (res.stderr or res.stdout or "").strip()
         raise RuntimeError(f"signal-cli failed (exit {res.returncode}): {err}")

@@ -2,27 +2,22 @@
 # pyright: reportUnusedFunction=false
 import os
 from urllib.parse import urljoin
-from datetime import datetime
 from sqlalchemy import text
 from config import Config
-from models import SessionLocal, Project, FoiaRequest, ProjectDocument, WorkbenchDataset, MediaItem, FoiaRequest
-from utils_signal import send_signal_group  # you already use this in send-alerts
-from events import on  # if your events.py lacks @on, see the NOTE below
+from models import SessionLocal, Project, FoiaRequest, ProjectDocument, WorkbenchDataset, MediaItem
+from utils_signal import send_signal_group
+from events import on
 
 APP_BASE = os.getenv("APP_BASE_URL", getattr(Config, "APP_BASE_URL", "http://localhost:5000"))
-GROUP_ID = os.getenv("SIGNAL_GROUP_ID")  # <-- set this in Render/your env
-
-def _p(s: str) -> str:
-    return s.replace("\n", " ").strip()
+GROUP_ID = os.getenv("SIGNAL_GROUP_ID", getattr(Config, "SIGNAL_GROUP_ID", ""))
 
 def _abs(path: str) -> str:
-    return urljoin(APP_BASE, path.lstrip("/"))
-
-def _group_id() -> str | None:
-    return os.getenv("SIGNAL_GROUP_ID", getattr(Config, "SIGNAL_GROUP_ID", None))
+    # ensure leading slash so urljoin doesn't drop path components
+    path = path if path.startswith("/") else "/" + path
+    return urljoin(APP_BASE if APP_BASE.endswith("/") else APP_BASE + "/", path)
 
 def _send(text: str) -> None:
-    gid = _group_id()
+    gid = GROUP_ID
     if not gid:
         print("[signal] No SIGNAL_GROUP_ID set; skipping send. Message was:\n", text)
         return
@@ -38,21 +33,18 @@ def _on_doc_uploaded(_name, doc_id: int, project_id: int | None = None):
     db = SessionLocal()
     try:
         d = db.get(ProjectDocument, doc_id)
-
-        # resolve project whether d exists or not
+        p = None
         if project_id:
             p = db.get(Project, project_id)
-        else:
-            p = db.query(Project).filter(Project.slug == (d.project_slug if d else None)).first() if d else None
+        elif d and d.project_id:
+            p = db.get(Project, d.project_id)
 
-        # SAFE title computation (don't touch attributes if d is None)
         title = f"doc #{doc_id}"
         if d:
             title = (d.title or d.filename or title)
 
+        url = _abs(f"projects/{p.slug}") if p and p.slug else APP_BASE
         p_name = f" ({p.name})" if p else ""
-        url = _abs(f"projects/{p.slug}") if p else APP_BASE
-
         _send(f"📄 New document{p_name}: {title}\n{url}")
     finally:
         db.close()
@@ -64,7 +56,7 @@ def _on_project_status(_name, project_id: int, old: str, new: str):
     try:
         p = db.get(Project, project_id)
         if not p: return
-        url = _abs(f"projects/{p.slug}")
+        url = _abs(f"projects/{p.slug}") if p.slug else APP_BASE
         _send(f"📌 Project status: {p.name} — {old} → {new}\n{url}")
     finally:
         db.close()
@@ -99,13 +91,14 @@ def _on_dataset_created(_name, dataset_id: int, project_id: int | None = None):
 
 print("[signal] listeners_signal loaded; APP_BASE =", APP_BASE)
 
+# --- Media transcribed ---
 @on("media.transcribed")
-def _on_media_transcribed(_, media_id: int, project_id: int | None = None):
+def _on_media_transcribed(_name, media_id: int, project_id: int | None = None):
     db = SessionLocal()
     try:
         m = db.get(MediaItem, media_id)
         if not m: return
-        proj = db.get(Project, project_id) if project_id else m.project
+        proj = db.get(Project, project_id) if project_id else (db.get(Project, m.project_id) if m.project_id else None)
         p_name = f" ({proj.name})" if proj else ""
         url = _abs(f"media/{m.id}")
         _send(f"🎙️ New transcript{p_name}: {m.title or m.filename}\n{url}")
