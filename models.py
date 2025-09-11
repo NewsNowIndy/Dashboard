@@ -214,6 +214,50 @@ class User(Base):
 
     def check_password(self, password: str) -> bool:
         return check_password_hash(self.password_hash, password)
+    
+class MediaItem(Base):
+    __tablename__ = "media_items"
+    id = Column(Integer, primary_key=True)
+    project_id = Column(Integer, ForeignKey("projects.id"), nullable=True, index=True)
+    title = Column(Text)
+    filename = Column(Text)
+    stored_path = Column(Text, nullable=False)
+    mime_type = Column(Text)
+    duration_seconds = Column(Integer)
+    notes = Column(Text)
+    transcript_text = Column(Text)      # full transcript (for search/export)
+    transcript_json = Column(Text)      # JSON-serialized segments [{start,end,text}]
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    project = relationship("Project", backref="media_items")
+
+# optional tiny FTS for media (separate from doc_fts)
+def ensure_av_fts(engine):
+    from sqlalchemy import text
+    with engine.begin() as conn:
+        conn.execute(text("""
+            CREATE VIRTUAL TABLE IF NOT EXISTS av_fts USING fts5(
+              media_id UNINDEXED,
+              title,
+              body,
+              tokenize='porter'
+            );
+        """))
+
+class CaseNotebookEntry(Base):
+    __tablename__ = "case_notebook_entries"
+    id = Column(Integer, primary_key=True)
+    project_id = Column(Integer, ForeignKey("projects.id"), nullable=False, index=True)
+    kind = Column(Text, nullable=False)  # 'fact','lead','question','quote','task','source'
+    title = Column(Text, nullable=False)
+    body = Column(Text)
+    source_url = Column(Text)
+    source_doc_id = Column(Integer, nullable=True)   # optional link to ProjectDocument.id
+    source_page = Column(Integer, nullable=True)
+    is_pinned = Column(Boolean, default=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    project = relationship("Project", backref="notebook_entries")
 
 def init_db():
     Base.metadata.create_all(engine)

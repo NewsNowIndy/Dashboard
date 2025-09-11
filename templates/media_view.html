@@ -1,0 +1,51 @@
+{% extends 'base.html' %}{% block content %}
+<h3>{{ m.title or m.filename }}</h3>
+<div class="mb-3">
+  {% if m.mime_type and 'video' in m.mime_type %}
+    <video id="player" src="{{ url_for('media.download', media_id=m.id) }}" controls style="width:100%;max-height:480px"></video>
+  {% else %}
+    <audio id="player" src="{{ url_for('media.download', media_id=m.id) }}" controls style="width:100%"></audio>
+  {% endif %}
+</div>
+
+<form class="row g-2 mb-3" method="post" action="{{ url_for('media.set_project', media_id=m.id) }}">
+    <div class="col-md-6">
+      <label class="form-label">Link to Project</label>
+      <select class="form-select" name="project_id">
+        <option value="">— None —</option>
+        {% for p in projects %}
+          <option value="{{ p.id }}" {% if m.project_id == p.id %}selected{% endif %}>{{ p.name }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="col-md-2 d-flex align-items-end">
+      <button class="btn btn-outline-light">Update</button>
+    </div>
+</form>
+
+<div class="card">
+  <div class="card-header"><strong>Transcript</strong></div>
+  <div class="card-body" id="tx">
+    {% for s in segments %}
+      <div class="mb-2">
+        <a href="#" class="jump" data-t="{{ s.start|round(2) }}">[{{ s.start|round(1) }}]</a>
+        {{ s.text }}
+      </div>
+    {% endfor %}
+    {% if not segments or not segments|length %}
+      <pre class="mb-0">{{ m.transcript_text or '(no transcript)' }}</pre>
+    {% endif %}
+  </div>
+</div>
+
+<script>
+document.querySelectorAll('.jump').forEach(a=>{
+  a.addEventListener('click', (e)=>{
+    e.preventDefault();
+    const t = parseFloat(a.dataset.t||"0");
+    const p = document.getElementById('player');
+    if(p){p.currentTime = t; p.play();}
+  });
+});
+</script>
+{% endblock %}

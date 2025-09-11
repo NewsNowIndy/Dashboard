@@ -1,0 +1,19 @@
+{% extends 'base.html' %}{% block content %}
+<div class="d-flex justify-content-between align-items-center">
+  <h3>Media Library</h3>
+  <a class="btn btn-outline-light" href="{{ url_for('media.upload') }}">Upload</a>
+</div>
+<table class="table table-dark table-hover mt-3">
+  <thead><tr><th>Title</th><th>Project</th><th>Duration</th><th>Uploaded</th></tr></thead>
+  <tbody>
+  {% for m in media %}
+    <tr>
+      <td><a href="{{ url_for('media.view', media_id=m.id) }}">{{ m.title or m.filename }}</a></td>
+      <td>{{ m.project.name if m.project else '—' }}</td>
+      <td>{{ m.duration_seconds or '—' }}</td>
+      <td>{{ m.created_at|localfmt }}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+{% endblock %}

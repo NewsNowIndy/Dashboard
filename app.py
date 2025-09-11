@@ -16,7 +16,7 @@ from models import (
     init_db, SessionLocal, engine,
     FoiaRequest, FoiaAttachment, RequestStatus, CourtCase, FoiaEvent, SurroundingCase,
     ProjectDocument, Project, ProjectNote, ProjectStatus,
-    WorkbenchDataset, WorkbenchRecordLink, WorkbenchPdfLink,
+    WorkbenchDataset, WorkbenchRecordLink, WorkbenchPdfLink, MediaItem, CaseNotebookEntry,
 )
 from utils import decrypt_file_to_bytes, normalize_request_status, days_until, age_in_days, badge_for_days_left, badge_for_requested_age, send_email
 from sheets_ingest import import_cases_from_csv, import_cases_from_gsheet, import_surrounding_cases_from_csv, import_surrounding_cases_from_gsheet
@@ -36,6 +36,10 @@ from urllib.parse import urljoin
 from models import User  # ensure User is imported here
 from calendar_feed import bp as bp_calendar
 from auth import bp_auth
+from routes_notebook import bp as bp_notebook
+from routes_media import bp as bp_media
+import listeners_signal
+from models import ensure_av_fts
 
 @event.listens_for(Engine, "connect")
 def _sqlite_pragmas(dbapi_conn, _):
@@ -79,13 +83,17 @@ app.config["MAX_FORM_PARTS"] = 20000                       # lots of parts for m
 app.config["TRAP_BAD_REQUEST_ERRORS"] = True 
 init_db()
 
+app.register_blueprint(bp_media)
 app.register_blueprint(bp_search)
 app.register_blueprint(bp_docs)
 app.register_blueprint(bp_entities)
 app.register_blueprint(bp_calendar)
 app.register_blueprint(bp_auth, url_prefix="")
+app.register_blueprint(bp_notebook)
 
 ensure_fts_tables(engine)
+
+ensure_av_fts(engine)
 
 start_scheduler(app)
 
@@ -120,6 +128,23 @@ def create_user(email, password):
 
 LOCAL_TZ = ZoneInfo("America/Indiana/Indianapolis")
 UTC = ZoneInfo("UTC")
+
+@app.cli.command("av-fts-reindex")
+def av_fts_reindex():
+    from sqlalchemy import text
+    from models import MediaItem
+    inserted = 0
+    with engine.begin() as conn:
+        conn.execute(text("DELETE FROM av_fts"))
+        db = SessionLocal()
+        try:
+            for m in db.query(MediaItem).all():
+                conn.execute(text("INSERT INTO av_fts (media_id, title, body) VALUES (:i,:t,:b)"),
+                             {"i": m.id, "t": m.title or m.filename or "", "b": m.transcript_text or ""})
+                inserted += 1
+        finally:
+            db.close()
+    print(f"Reindexed {inserted} media transcripts.")
 
 @app.get("/healthz")
 def healthz():
@@ -1282,7 +1307,26 @@ def project_detail(slug):
             .order_by(WorkbenchDataset.uploaded_at.desc())
             .all()
         )
-        return render_template("project_detail.html", project=p, notes=notes, docs=docs, datasets=datasets)
+        media = (
+            db.query(MediaItem)
+            .filter(MediaItem.project_id == p.id)
+            .order_by(MediaItem.created_at.desc())
+            .all()
+        )
+
+        notebook = (
+            db.query(CaseNotebookEntry)
+            .filter(CaseNotebookEntry.project_id == p.id)
+            .order_by(CaseNotebookEntry.is_pinned.desc(), CaseNotebookEntry.created_at.desc())
+            .limit(200)
+            .all()
+        )
+
+        return render_template(
+            "project_detail.html",
+            project=p, notes=notes, docs=docs, datasets=datasets,
+            media=media, notebook=notebook  # <-- pass through
+        )
     finally:
         db.close()
 

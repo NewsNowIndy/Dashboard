@@ -3,10 +3,14 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+BASE_DIR = os.path.abspath(os.path.dirname(__file__))
+
 class Config:
     # ---- Environment toggle ----
     # APP_ENV=prod on Render; default dev locally
     APP_ENV = os.getenv("APP_ENV", "dev").lower()
+
+    DATABASE_URL = os.getenv("DATABASE_URL")
 
     # ---- Storage roots (DB file + uploads) ----
     if APP_ENV == "prod":
@@ -15,10 +19,8 @@ class Config:
         DATA_DIR    = os.getenv("UPLOAD_DIR", "/var/foia/uploads")
     else:
         # Local dev: use a local instance folder (outside git)
-        _instance = os.getenv("INSTANCE_DIR") or os.path.join(os.path.dirname(__file__), "instance")
-        os.makedirs(_instance, exist_ok=True)
-        SQLITE_PATH = os.getenv("SQLITE_PATH", os.path.join(_instance, "foia.db"))
-        DATA_DIR    = os.getenv("UPLOAD_DIR", os.path.join(_instance, "uploads"))
+        SQLITE_PATH = os.getenv("SQLITE_PATH", os.path.join(BASE_DIR, "foia.db"))
+        DATA_DIR    = os.getenv("UPLOAD_DIR", os.path.join(BASE_DIR, "data"))
 
     # Derived subdirs (keep your existing names)
     ATTACH_DIR   = os.path.join(DATA_DIR, "attachments")

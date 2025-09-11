@@ -82,9 +82,73 @@
   </div>
 </div>
 
+<!-- Case Notebook -->
+<div class="card mt-3">
+  <div class="card-header d-flex justify-content-between align-items-center">
+    <strong>Case Notebook</strong>
+    <form class="d-flex gap-2" method="post" action="{{ url_for('notebook.add', slug=project.slug) }}">
+      <select class="form-select form-select-sm" name="kind" style="width:auto">
+        <option value="fact">Fact</option><option value="lead">Lead</option>
+        <option value="question">Question</option><option value="quote">Quote</option>
+        <option value="task">Task</option><option value="source">Source</option>
+      </select>
+      <input class="form-control form-control-sm" name="title" placeholder="Title">
+      <input class="form-control form-control-sm" name="body"  placeholder="Details (optional)">
+      <input class="form-control form-control-sm" name="source_url" placeholder="Link (optional)">
+      <button class="btn btn-sm btn-primary">Add</button>
+    </form>
+  </div>
+  <div class="card-body p-0">
+    <table class="table table-sm mb-0 align-middle">
+      <thead class="table-dark"><tr><th>Type</th><th>Title</th><th>Details</th><th>Source</th><th>When</th><th></th></tr></thead>
+      <tbody>
+      {% for n in notebook %}
+        <tr>
+          <td>{{ n.kind|title }}{% if n.is_pinned %} 📌{% endif %}</td>
+          <td>{{ n.title }}</td>
+          <td class="text-wrap">{{ n.body }}</td>
+          <td>{% if n.source_url %}<a href="{{ n.source_url }}" target="_blank">link</a>{% else %}—{% endif %}</td>
+          <td>{{ n.created_at|localfmt }}</td>
+          <td class="text-end">
+            <form method="post" action="{{ url_for('notebook.pin', entry_id=n.id) }}" class="d-inline">
+              <button class="btn btn-sm btn-outline-light">{{ 'Unpin' if n.is_pinned else 'Pin' }}</button>
+            </form>
+            <form method="post" action="{{ url_for('notebook.delete', entry_id=n.id) }}" class="d-inline" onsubmit="return confirm('Delete?')">
+              <button class="btn btn-sm btn-outline-danger">Delete</button>
+            </form>
+          </td>
+        </tr>
+      {% endfor %}
+      {% if not notebook or not notebook|length %}
+        <tr><td colspan="6" class="text-center text-muted py-3">No entries yet.</td></tr>
+      {% endif %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
 <!-- Documents (existing list) -->
 <div class="card mb-4">
-  <div class="card-header"><strong>Documents</strong></div>
+  <div class="card-header d-flex justify-content-between align-items-center">
+    <strong>Documents</strong>
+
+    <!-- Upload (auto-submit on pick) -->
+    <form class="d-flex align-items-center gap-2"
+          method="post"
+          action="{{ url_for('project_mcpo_upload') }}"
+          enctype="multipart/form-data">
+      <!-- Hidden file input; label acts as the visible button -->
+      <input class="d-none"
+             type="file"
+             name="files[]"
+             id="docFiles"
+             multiple
+             accept=".pdf,.doc,.docx,.csv,.xlsx,.png,.jpg,.jpeg,.gif"
+             onchange="this.form.submit()">
+      <label for="docFiles" class="btn btn-sm btn-primary mb-0">Upload</label>
+    </form>
+  </div>
+
   <div class="card-body p-0">
     {% if docs %}
       <div class="table-responsive" style="max-height: 60vh; overflow-y: auto;">
@@ -125,6 +189,49 @@
     {% else %}
       <div class="p-3">
         <div class="alert alert-secondary mb-0">No documents yet.</div>
+      </div>
+    {% endif %}
+  </div>
+</div>
+
+<!-- Media section -->
+<div class="card mt-3">
+  <div class="card-header d-flex justify-content-between align-items-center">
+    <strong>Audio/Video</strong>
+    <a class="btn btn-sm btn-outline-light"
+       href="{{ url_for('media.upload') }}?project_id={{ project.id }}">
+      Upload Media
+    </a>
+  </div>
+  <div class="card-body p-0">
+    {% if media and media|length %}
+      <div class="table-responsive" style="max-height: 40vh; overflow-y: auto;">
+        <table class="table table-sm table-hover mb-0 align-middle">
+          <thead class="table-dark">
+            <tr>
+              <th>Title</th>
+              <th style="width: 120px;">Duration</th>
+              <th style="width: 220px;">Added</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for m in media %}
+              <tr>
+                <td>
+                  <a href="{{ url_for('media.view', media_id=m.id) }}" class="text-decoration-none">
+                    {{ m.title or m.filename }}
+                  </a>
+                </td>
+                <td>{{ m.duration_seconds or '—' }}</td>
+                <td>{{ m.created_at|localfmt }}</td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    {% else %}
+      <div class="p-3">
+        <div class="alert alert-secondary mb-0">No Media Uploaded</div>
       </div>
     {% endif %}
   </div>
