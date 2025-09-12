@@ -18,30 +18,58 @@ export PATH="$(dirname "$PYBIN"):$PROJECT_ROOT/bin:$PATH"
 # Ensure dirs
 mkdir -p /var/foia/media /var/foia/signal-cli "$PROJECT_ROOT/bin"
 
-# Install signal-cli Linux-native if missing (copy, not symlink)
+# Install signal-cli (native) into ./bin if missing or not executable
 SIGNAL_BIN="$PROJECT_ROOT/bin/signal-cli"
 if [ ! -x "$SIGNAL_BIN" ]; then
   SIGCLI_VER="${SIGCLI_VER:-0.13.18}"
+  BASE="https://github.com/AsamK/signal-cli/releases/download/v${SIGCLI_VER}"
+
+  WORKDIR="$PROJECT_ROOT/signal-cli-${SIGCLI_VER}"
+  rm -rf "$WORKDIR"
+  mkdir -p "$WORKDIR"
+
+  # 1) Try the Linux-native tarball
   TARBALL="signal-cli-${SIGCLI_VER}-Linux-native.tar.gz"
-  BASE_URL="https://github.com/AsamK/signal-cli/releases/download/v${SIGCLI_VER}"
-  TMP="/tmp/${TARBALL}"
-  DEST="$PROJECT_ROOT/signal-cli-${SIGCLI_VER}"
+  if curl -fsSL -o "/tmp/$TARBALL" "${BASE}/${TARBALL}"; then
+    tar -C "$WORKDIR" --strip-components=1 -xzf "/tmp/$TARBALL" || true
+  fi
 
-  rm -rf "$DEST"
-  mkdir -p "$DEST"
-  curl -fsSL -o "$TMP" "${BASE_URL}/${TARBALL}"
-  tar -C "$DEST" --strip-components=1 -xzf "$TMP"
+  # Try to locate a binary after extraction (layout varies by release)
+  SRC="$(find "$WORKDIR" -type f -name 'signal-cli' -print -quit || true)"
 
-  # Copy the real binary into ./bin and make it executable
-  install -m 0755 "$DEST/bin/signal-cli" "$SIGNAL_BIN"
+  # 2) If not found, try the single-file native asset (name also varies by release)
+  if [ -z "$SRC" ]; then
+    for F in \
+      "signal-cli-native-${SIGCLI_VER}-linux-amd64" \
+      "signal-cli-native-${SIGCLI_VER}-linux-x86_64" \
+      "signal-cli-${SIGCLI_VER}-Linux-x86_64" \
+      "signal-cli-${SIGCLI_VER}-Linux"; do
+      if curl -fsSL -o "$WORKDIR/signal-cli.bin" "${BASE}/${F}"; then
+        chmod +x "$WORKDIR/signal-cli.bin"
+        SRC="$WORKDIR/signal-cli.bin"
+        break
+      fi
+    done
+  fi
+
+  # 3) Give up with a helpful log if still missing
+  if [ -z "$SRC" ]; then
+    echo "ERROR: Could not locate signal-cli binary in $WORKDIR after downloading assets."
+    echo "Archive contents:"
+    tar -tzf "/tmp/$TARBALL" | head -n 50 || true
+    exit 1
+  fi
+
+  # 4) Install a real file (avoid symlinks that break on redeploy)
+  install -m 0755 "$SRC" "$SIGNAL_BIN"
 fi
 
-# Make sure our app and helpers use this exact path
+# Make sure our app uses exactly this binary
 export SIGNAL_CLI_BIN="${SIGNAL_CLI_BIN:-$SIGNAL_BIN}"
 export PATH="$PROJECT_ROOT/bin:$PATH"
-hash -r  # refresh shell command cache
+hash -r
 
-# Log checks (non-fatal)
+# Quick visibility
 echo "SIGNAL_CLI_BIN=$SIGNAL_CLI_BIN"
 ls -l "$PROJECT_ROOT/bin" || true
 "$SIGNAL_CLI_BIN" --version || true
