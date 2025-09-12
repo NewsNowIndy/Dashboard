@@ -23,53 +23,36 @@ SIGNAL_BIN="$PROJECT_ROOT/bin/signal-cli"
 if [ ! -x "$SIGNAL_BIN" ]; then
   SIGCLI_VER="${SIGCLI_VER:-0.13.18}"
   BASE="https://github.com/AsamK/signal-cli/releases/download/v${SIGCLI_VER}"
-
   WORKDIR="$PROJECT_ROOT/signal-cli-${SIGCLI_VER}"
+  TARBALL="signal-cli-${SIGCLI_VER}-Linux-native.tar.gz"
+
   rm -rf "$WORKDIR"
   mkdir -p "$WORKDIR"
 
-  # 1) Try the Linux-native tarball
-  TARBALL="signal-cli-${SIGCLI_VER}-Linux-native.tar.gz"
-  if curl -fsSL -o "/tmp/$TARBALL" "${BASE}/${TARBALL}"; then
-    tar -C "$WORKDIR" --strip-components=1 -xzf "/tmp/$TARBALL" || true
-  fi
+  # Extract WITHOUT --strip-components (archive may be single-file at root)
+  curl -fsSL -o "/tmp/$TARBALL" "${BASE}/${TARBALL}"
+  tar -C "$WORKDIR" -xzf "/tmp/$TARBALL"
 
-  # Try to locate a binary after extraction (layout varies by release)
+  # Locate the binary no matter the layout (root or nested dir/bin)
   SRC="$(find "$WORKDIR" -type f -name 'signal-cli' -print -quit || true)"
 
-  # 2) If not found, try the single-file native asset (name also varies by release)
   if [ -z "$SRC" ]; then
-    for F in \
-      "signal-cli-native-${SIGCLI_VER}-linux-amd64" \
-      "signal-cli-native-${SIGCLI_VER}-linux-x86_64" \
-      "signal-cli-${SIGCLI_VER}-Linux-x86_64" \
-      "signal-cli-${SIGCLI_VER}-Linux"; do
-      if curl -fsSL -o "$WORKDIR/signal-cli.bin" "${BASE}/${F}"; then
-        chmod +x "$WORKDIR/signal-cli.bin"
-        SRC="$WORKDIR/signal-cli.bin"
-        break
-      fi
-    done
-  fi
-
-  # 3) Give up with a helpful log if still missing
-  if [ -z "$SRC" ]; then
-    echo "ERROR: Could not locate signal-cli binary in $WORKDIR after downloading assets."
-    echo "Archive contents:"
+    echo "ERROR: signal-cli not found after extracting $TARBALL"
+    echo "Archive contents (first 50 entries):"
     tar -tzf "/tmp/$TARBALL" | head -n 50 || true
     exit 1
   fi
 
-  # 4) Install a real file (avoid symlinks that break on redeploy)
+  # Install a *real file* into ./bin (avoid symlinks that can break across deploys)
   install -m 0755 "$SRC" "$SIGNAL_BIN"
 fi
 
-# Make sure our app uses exactly this binary
+# Make sure the app uses exactly this binary
 export SIGNAL_CLI_BIN="${SIGNAL_CLI_BIN:-$SIGNAL_BIN}"
 export PATH="$PROJECT_ROOT/bin:$PATH"
 hash -r
 
-# Quick visibility
+# Debug: show what we’ll run
 echo "SIGNAL_CLI_BIN=$SIGNAL_CLI_BIN"
 ls -l "$PROJECT_ROOT/bin" || true
 "$SIGNAL_CLI_BIN" --version || true
