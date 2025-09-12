@@ -4,18 +4,10 @@ set -euxo pipefail
 export PROJECT_ROOT="/opt/render/project/src"
 export SIGNAL_CLI_CONFIG="${SIGNAL_CLI_CONFIG:-/var/foia/signal-cli}"
 
-# Pick a python that already has flask+gunicorn from the build
+# Pick a python; prefer the app venv
 pick_python() {
-  for p in "/opt/render/project/.venv/bin/python" "/opt/render/project/src/.venv/bin/python" "/usr/bin/python3"; do
-    if [ -x "$p" ]; then
-      "$p" - <<'PY' >/dev/null 2>&1 || continue
-import importlib.util, sys
-mods = ("flask","gunicorn")
-sys.exit(0 if all(importlib.util.find_spec(m) for m in mods) else 1)
-PY
-      echo "$p"
-      return 0
-    fi
+  for p in "/opt/render/project/src/.venv/bin/python" "/opt/render/project/.venv/bin/python" "/usr/bin/python3"; do
+    [ -x "$p" ] && echo "$p" && return 0
   done
   command -v python3
 }
@@ -23,7 +15,7 @@ PY
 PYBIN="$(pick_python)"
 export PATH="$(dirname "$PYBIN"):$PROJECT_ROOT/bin:$PATH"
 
-# Ensure persistent dirs
+# Ensure dirs
 mkdir -p /var/foia/media /var/foia/signal-cli "$PROJECT_ROOT/bin"
 
 # Fetch native signal-cli (no Java) if missing
@@ -51,9 +43,8 @@ def ok(m): return iu.find_spec(m) is not None
 print("flask:",     "ok" if ok("flask")     else "missing")
 print("gunicorn:",  "ok" if ok("gunicorn")  else "missing")
 print("whisper:",   "ok" if ok("whisper")   else "missing")
-print("f_whisper:", "ok" if ok("faster_whisper") else "missing")
 print("torch:",     "ok" if ok("torch")     else "missing")
 PY
 
-# Bind to $PORT so Render sees an open port
+# Bind to $PORT for Render
 exec "$PYBIN" -m gunicorn app:app --bind "0.0.0.0:${PORT}"
