@@ -18,19 +18,33 @@ export PATH="$(dirname "$PYBIN"):$PROJECT_ROOT/bin:$PATH"
 # Ensure dirs
 mkdir -p /var/foia/media /var/foia/signal-cli "$PROJECT_ROOT/bin"
 
-# Fetch native signal-cli (no Java) if missing
-if ! command -v signal-cli >/dev/null 2>&1; then
+# Install signal-cli Linux-native if missing (copy, not symlink)
+SIGNAL_BIN="$PROJECT_ROOT/bin/signal-cli"
+if [ ! -x "$SIGNAL_BIN" ]; then
   SIGCLI_VER="${SIGCLI_VER:-0.13.18}"
   TARBALL="signal-cli-${SIGCLI_VER}-Linux-native.tar.gz"
   BASE_URL="https://github.com/AsamK/signal-cli/releases/download/v${SIGCLI_VER}"
   TMP="/tmp/${TARBALL}"
   DEST="$PROJECT_ROOT/signal-cli-${SIGCLI_VER}"
+
   rm -rf "$DEST"
-  mkdir -p "$DEST" "$PROJECT_ROOT/bin"
+  mkdir -p "$DEST"
   curl -fsSL -o "$TMP" "${BASE_URL}/${TARBALL}"
   tar -C "$DEST" --strip-components=1 -xzf "$TMP"
-  ln -sf "$DEST/bin/signal-cli" "$PROJECT_ROOT/bin/signal-cli"
+
+  # Copy the real binary into ./bin and make it executable
+  install -m 0755 "$DEST/bin/signal-cli" "$SIGNAL_BIN"
 fi
+
+# Make sure our app and helpers use this exact path
+export SIGNAL_CLI_BIN="${SIGNAL_CLI_BIN:-$SIGNAL_BIN}"
+export PATH="$PROJECT_ROOT/bin:$PATH"
+hash -r  # refresh shell command cache
+
+# Log checks (non-fatal)
+echo "SIGNAL_CLI_BIN=$SIGNAL_CLI_BIN"
+ls -l "$PROJECT_ROOT/bin" || true
+"$SIGNAL_CLI_BIN" --version || true
 
 # Quick visibility (non-fatal)
 which python || true

@@ -4,14 +4,11 @@ import shutil
 import subprocess
 
 def _signal_bin() -> str:
-    """
-    Resolve the signal-cli binary. Prefer explicit env, then local ./bin, then PATH.
-    """
     explicit = os.getenv("SIGNAL_CLI_BIN")
-    if explicit:
+    if explicit and os.path.exists(explicit) and os.access(explicit, os.X_OK):
         return explicit
     here_bin = os.path.join(os.getenv("PROJECT_ROOT", "/opt/render/project/src"), "bin", "signal-cli")
-    if os.path.exists(here_bin):
+    if os.path.exists(here_bin) and os.access(here_bin, os.X_OK):
         return here_bin
     found = shutil.which("signal-cli")
     if found:
