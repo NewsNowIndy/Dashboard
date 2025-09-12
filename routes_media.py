@@ -240,3 +240,54 @@ def download(media_id):
         return send_file(m.stored_path, as_attachment=True, download_name=m.filename)
     finally:
         db.close()
+
+@bp.post("/media/<int:media_id>/delete")
+@login_required
+def delete(media_id: int):
+    """
+    Delete a media item, its on-disk files, and its AV-FTS row.
+    Redirect back to the project if linked, else media index.
+    """
+    db = SessionLocal()
+    try:
+        m = db.get(MediaItem, media_id)
+        if not m:
+            flash("Media not found.", "warning")
+            return redirect(url_for("media.index"))
+
+        # Where to go after delete
+        proj_slug = None
+        if m.project_id:
+            proj_slug = db.query(Project.slug).filter(Project.id == m.project_id).scalar()
+
+        # Remove the main stored file
+        try:
+            if m.stored_path and os.path.exists(m.stored_path):
+                os.remove(m.stored_path)
+        except Exception:
+            pass
+
+        # Remove any optional derivative files if your model has them
+        for attr in ("transcript_path", "waveform_path", "preview_path", "audio_path"):
+            p = getattr(m, attr, None)
+            if p and os.path.exists(p):
+                try:
+                    os.remove(p)
+                except Exception:
+                    pass
+
+        # Remove from AV FTS index (if present)
+        try:
+            db.execute(text("DELETE FROM av_fts WHERE media_id = :mid"), {"mid": m.id})
+        except Exception:
+            pass
+
+        db.delete(m)
+        db.commit()
+        flash("Media deleted.", "success")
+    finally:
+        db.close()
+
+    if proj_slug:
+        return redirect(url_for("project_detail", slug=proj_slug))
+    return redirect(url_for("media.index"))

@@ -194,44 +194,50 @@
   </div>
 </div>
 
-<!-- Media section -->
+<!-- Media section (always shown) -->
 <div class="card mt-3">
   <div class="card-header d-flex justify-content-between align-items-center">
     <strong>Audio/Video</strong>
-    <a class="btn btn-sm btn-outline-light"
-       href="{{ url_for('media.upload') }}?project_id={{ project.id }}">
-      Upload Media
-    </a>
+    <a class="btn btn-sm btn-outline-primary" href="{{ url_for('media.index') }}">Open Media</a>
   </div>
   <div class="card-body p-0">
     {% if media and media|length %}
-      <div class="table-responsive" style="max-height: 40vh; overflow-y: auto;">
-        <table class="table table-sm table-hover mb-0 align-middle">
-          <thead class="table-dark">
-            <tr>
-              <th>Title</th>
-              <th style="width: 120px;">Duration</th>
-              <th style="width: 220px;">Added</th>
-            </tr>
-          </thead>
-          <tbody>
-            {% for m in media %}
-              <tr>
-                <td>
-                  <a href="{{ url_for('media.view', media_id=m.id) }}" class="text-decoration-none">
-                    {{ m.title or m.filename }}
-                  </a>
-                </td>
-                <td>{{ m.duration_seconds or '—' }}</td>
-                <td>{{ m.created_at|localfmt }}</td>
-              </tr>
-            {% endfor %}
-          </tbody>
-        </table>
-      </div>
+      <table class="table table-sm table-hover mb-0 align-middle">
+        <thead class="table-dark">
+          <tr>
+            <th>Title</th>
+            <th style="width: 120px;">Duration</th>
+            <th style="width: 180px;">Added</th>
+            <th style="width: 220px;" class="text-end">Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+        {% for m in media %}
+          <tr>
+            <td class="text-wrap">
+              <a href="{{ url_for('media.view', media_id=m.id) }}" class="text-decoration-none">
+                {{ m.title or m.filename }}
+              </a>
+              <div class="small text-muted">{{ m.filename }}</div>
+            </td>
+            <td>{{ m.duration_seconds or '—' }}</td>
+            <td>{{ m.created_at|localfmt }}</td>
+            <td class="text-end">
+              <a class="btn btn-sm btn-outline-info me-2" href="{{ url_for('media.view', media_id=m.id) }}">Open</a>
+              <form method="post"
+                    action="{{ url_for('media.delete', media_id=m.id) }}"
+                    class="d-inline"
+                    onsubmit="return confirm('Delete this media? This cannot be undone.');">
+                <button class="btn btn-sm btn-outline-danger">Delete</button>
+              </form>
+            </td>
+          </tr>
+        {% endfor %}
+        </tbody>
+      </table>
     {% else %}
       <div class="p-3">
-        <div class="alert alert-secondary mb-0">No Media Uploaded</div>
+        <div class="alert alert-secondary mb-0">No Media Uploaded.</div>
       </div>
     {% endif %}
   </div>

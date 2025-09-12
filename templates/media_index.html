@@ -3,17 +3,41 @@
   <h3>Media Library</h3>
   <a class="btn btn-outline-light" href="{{ url_for('media.upload') }}">Upload</a>
 </div>
-<table class="table table-dark table-hover mt-3">
-  <thead><tr><th>Title</th><th>Project</th><th>Duration</th><th>Uploaded</th></tr></thead>
+
+<table class="table table-dark table-hover mt-3 align-middle">
+  <thead>
+    <tr>
+      <th>Title</th>
+      <th>Project</th>
+      <th style="width:120px;">Duration</th>
+      <th style="width:180px;">Uploaded</th>
+      <th style="width:200px;" class="text-end">Actions</th>
+    </tr>
+  </thead>
   <tbody>
   {% for m in media %}
     <tr>
-      <td><a href="{{ url_for('media.view', media_id=m.id) }}">{{ m.title or m.filename }}</a></td>
+      <td>
+        <a href="{{ url_for('media.view', media_id=m.id) }}">{{ m.title or m.filename }}</a>
+        <div class="small text-muted">{{ m.filename }}</div>
+      </td>
       <td>{{ m.project.name if m.project else '—' }}</td>
       <td>{{ m.duration_seconds or '—' }}</td>
       <td>{{ m.created_at|localfmt }}</td>
+      <td class="text-end">
+        <a class="btn btn-sm btn-outline-info me-2" href="{{ url_for('media.view', media_id=m.id) }}">Open</a>
+        <form method="post"
+              action="{{ url_for('media.delete', media_id=m.id) }}"
+              class="d-inline"
+              onsubmit="return confirm('Delete this media? This cannot be undone.');">
+          <button class="btn btn-sm btn-outline-danger">Delete</button>
+        </form>
+      </td>
     </tr>
   {% endfor %}
+  {% if not media or not media|length %}
+    <tr><td colspan="5" class="text-center text-muted">No media uploaded.</td></tr>
+  {% endif %}
   </tbody>
 </table>
 {% endblock %}
