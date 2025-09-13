@@ -1,15 +1,33 @@
-<short summary of what changed> (closes #<issue-number>)
+# ---- Conventional Commit header (drives release bump) ----
+# Use one of:
+#   fix(scope): short subject           -> patch
+#   feat(scope): short subject          -> minor
+#   feat!(scope): short subject         -> major (breaking)
+#   Or add a BREAKING CHANGE footer (see below) for major.
+#
+# Example:
+# feat(foia): add follow-up tracking
+
+<type>(<scope>): <subject> (closes #<issue-number>)
 
 Detailed description of what you did:
 - Why the change was needed
 - What files/components you touched
 - Any side effects, limitations, or follow-up notes
 
-Refs: #<other-related-issues-if-any>
+# ---- Body (what & why; details/bullets welcome) ----
+# - What changed?
+# - Why did it change?
+# - How was it implemented?
+# - Any migration/data notes?
 
-# -------------------------------
+# ---- Footer (automation & references) ----
+# Closes #<issue-number>
+# BREAKING CHANGE: <explain impact and required actions>
+# Co-authored-by: Name <email>
+
 # Notes:
-# - First line should be <= 72 chars (GitHub shows this as the title).
-# - Replace <issue-number> with the GitHub issue you want to close.
-# - Lines starting with '#' are ignored.
-# -------------------------------
+# - First line (subject) <= 72 chars.
+# - Lines starting with '#' are ignored by Git.
+# - Common types: feat, fix, perf, refactor, docs, chore, test, build, ci, revert
+# - Suggested scopes: foia, auth, workbench, cases, docs, scheduler, search, entities
