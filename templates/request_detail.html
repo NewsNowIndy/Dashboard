@@ -127,21 +127,29 @@
         <form method="post" action="{{ url_for('request_status', req_id=r.id) }}" class="row g-2 align-items-end">
           <div class="col-12">
             <label class="form-label">Status</label>
-            <select name="status" class="form-select form-select-sm">
+        
+            <!-- This is what actually gets submitted -->
+            <input type="hidden" name="status" id="status_token" value="{{ r.status.name }}">
+        
+            <!-- This is the visible control -->
+            <select id="status_select" class="form-select form-select-sm"
+                    onchange="document.getElementById('status_token').value=this.value">
               <option value="PENDING"   {{ 'selected' if r.status.name=='PENDING' }}>Pending</option>
               <option value="COMPLETED" {{ 'selected' if r.status.name=='COMPLETED' }}>Completed</option>
             </select>
           </div>
+        
           <div class="col-12">
             <label class="form-label">Completed (MM-DD-YYYY)</label>
             <input type="text" name="completed_date" class="form-control form-control-sm"
                    placeholder="MM-DD-YYYY"
                    value="{{ r.completed_date|mdy }}">
           </div>
+        
           <div class="col-12 mt-2">
             <button class="btn btn-primary btn-sm w-100">Save Status</button>
           </div>
-        </form>
+        </form>           
         <small class="text-muted">Status form also accepts MM-DD-YYYY.</small>
       </div>
     </div>

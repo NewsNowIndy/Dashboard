@@ -14,6 +14,22 @@
     <label class="form-label">Request Date</label>
     <input type="date" name="request_date" class="form-control" required>
   </div>
+
+  <!-- NEW: Status -->
+  <div class="col-md-4">
+    <label class="form-label">Status</label>
+
+    <!-- Submitted value -->
+    <input type="hidden" name="status" id="new_status_token" value="PENDING">
+
+    <!-- Visible control -->
+    <select id="new_status_select" class="form-select"
+            onchange="document.getElementById('new_status_token').value=this.value">
+      <option value="PENDING" selected>Pending</option>
+      <option value="COMPLETED">Completed</option>
+    </select>
+  </div>
+
   <div class="col-md-12">
     <label class="form-label">Notes</label>
     <textarea name="notes" class="form-control" rows="3"></textarea>

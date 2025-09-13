@@ -615,7 +615,7 @@ def request_status(req_id):
         old = r.status  # capture before change
 
         status_token = normalize_request_status(request.form.get("status", "Pending"))  # 'PENDING'/'COMPLETED'
-        new_status = RequestStatus[status_token]
+        new_status = RequestStatus.__members__.get(status_token) or RequestStatus(status_token)
         r.status = new_status
 
         cd = request.form.get("completed_date")
