@@ -1,4 +1,4 @@
-from flask import Flask, render_template, request, redirect, url_for, send_file, flash, abort, jsonify
+from flask import Flask, render_template, request, redirect, url_for, send_file, flash, abort, jsonify, send_from_directory
 from datetime import datetime, date, timedelta
 from zoneinfo import ZoneInfo
 import io
@@ -40,6 +40,7 @@ from routes_notebook import bp as bp_notebook
 from routes_media import bp as bp_media
 import listeners_signal
 from models import ensure_av_fts
+from policies import policies
 
 @event.listens_for(Engine, "connect")
 def _sqlite_pragmas(dbapi_conn, _):
@@ -90,6 +91,7 @@ app.register_blueprint(bp_entities)
 app.register_blueprint(bp_calendar)
 app.register_blueprint(bp_auth, url_prefix="")
 app.register_blueprint(bp_notebook)
+app.register_blueprint(policies)
 
 ensure_fts_tables(engine)
 
@@ -371,6 +373,10 @@ def abs_url(endpoint, **values):
         return urljoin(base.rstrip("/") + "/", path.lstrip("/"))
     # Fallback: this will work if SERVER_NAME is set
     return url_for(endpoint, _external=True, **values)
+
+@app.route("/robots.txt")
+def robots_txt():
+    return send_from_directory(app.static_folder, "robots.txt", mimetype="text/plain")
 
 # -----------------------------
 # FOIA: Home / Search (sorted by Reference # desc)
