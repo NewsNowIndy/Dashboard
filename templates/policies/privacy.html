@@ -5,34 +5,47 @@
   <title>Privacy Policy — NewsNowIndy</title>
   <meta name="robots" content="noindex, nofollow">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <!-- Include Bootstrap if this page is not extending your base template -->
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
   <link rel="stylesheet" href="{{ url_for('static', filename='main.css') }}">
 </head>
 <body class="bg-dark text-light">
   <main class="container py-4">
     <h1>Privacy Policy</h1>
-    <p><em>Last updated: September 13, 2025</em></p>
+    <p><em>Last updated: {{ last_updated.strftime('%B %d, %Y') if last_updated else 'September 13, 2025' }}</em></p>
 
-    <!-- Paste your long-form privacy content here -->
     <h2>What We Collect</h2>
-    <p>...</p>
+    <p>We aim to collect the minimum information necessary to evaluate tips and protect sources.</p>
+    <ul>
+      <li><strong>Tip content:</strong> text you submit and any attachments.</li>
+      <li><strong>Optional contact details:</strong> if you choose to provide them.</li>
+      <li><strong>Basic technical data:</strong> limited security-related metadata (e.g., timestamps, file sizes). We do not intentionally collect names, IP addresses, or precise locations.</li>
+    </ul>
 
     <h2>How We Use Information</h2>
-    <p>...</p>
+    <ul>
+      <li>Evaluate tips, verify information, and conduct reporting.</li>
+      <li>Communicate with you if you provide contact details.</li>
+      <li>Maintain platform security and comply with legal obligations.</li>
+    </ul>
 
     <h2>Sharing</h2>
-    <p>...</p>
+    <p>We do not sell your data. We may share materials internally with our editors and, if necessary, with trusted partners (e.g., security experts) under confidentiality. If legally compelled, we may disclose limited information and may seek to challenge such requests where feasible.</p>
 
-    <h2>Storage & Security</h2>
-    <p>...</p>
+    <h2>Storage &amp; Security</h2>
+    <p>Submissions are stored on encrypted servers operated by NewsNowIndy and/or its service providers in the United States, with access restricted to authorized staff.</p>
 
     <h2>Retention</h2>
-    <p>...</p>
+    <p>We retain data only as long as needed for the purposes above, then delete or anonymize it. Attachments that are irrelevant or harmful may be discarded on receipt.</p>
 
     <h2>Your Choices</h2>
-    <p>...</p>
+    <p>You can submit anonymously. If you shared contact info and later want it removed, contact us at <a href="mailto:privacy@newsnowindy.com">privacy@newsnowindy.com</a>. We may ask you to verify control of the contact method.</p>
+
+    <h2>Children</h2>
+    <p>This platform is not intended for children under 16.</p>
 
     <h2>Contact</h2>
-    <p>...</p>
+    <p>Questions? Email <a href="mailto:privacy@newsnowindy.com">privacy@newsnowindy.com</a>.</p>
   </main>
 </body>
 </html>

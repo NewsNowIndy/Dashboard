@@ -5,35 +5,57 @@
   <title>Whistleblowing Policy — NewsNowIndy</title>
   <meta name="robots" content="noindex, nofollow">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <!-- Optional: use your existing dark theme -->
+  <!-- Include Bootstrap if this page is not extending your base template -->
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
   <link rel="stylesheet" href="{{ url_for('static', filename='main.css') }}">
 </head>
 <body class="bg-dark text-light">
   <main class="container py-4">
     <h1>Whistleblowing Policy</h1>
-    <p><em>Last updated: September 13, 2025</em></p>
+    <p><em>Last updated: {{ last_updated.strftime('%B %d, %Y') if last_updated else 'September 13, 2025' }}</em></p>
 
-    <!-- Paste your long-form policy content here -->
-    <h2>Purpose & Scope</h2>
-    <p>...</p>
+    <h2>Purpose &amp; Scope</h2>
+    <p>NewsNowIndy Tips exists to receive and investigate information in the public interest, including public corruption, misuse of funds, conflicts of interest, failures in public safety systems, systemic misconduct, and similar matters affecting residents of Central Indiana.</p>
 
     <h2>Who May Submit</h2>
-    <p>...</p>
+    <p>Anyone with credible information (employees, contractors, public officials, community members) may submit tips. You may remain anonymous.</p>
 
     <h2>Submission Guidelines</h2>
-    <p>...</p>
+    <p><strong>What to submit:</strong></p>
+    <ul>
+      <li>Factual descriptions, dates, names of entities, locations, and relevant documents.</li>
+      <li>Where possible, corroborating evidence and an explanation of how you know.</li>
+    </ul>
+    <p><strong>What not to submit:</strong></p>
+    <ul>
+      <li>Classified information or material you are legally prohibited from sharing.</li>
+      <li>Sensitive personal data about private individuals unless essential to demonstrate a significant public-interest issue.</li>
+      <li>Malware or password-protected archives without including the password.</li>
+    </ul>
 
     <h2>How We Handle Submissions</h2>
-    <p>...</p>
+    <ul>
+      <li>Every tip is triaged for credibility and public-interest value.</li>
+      <li>We seek corroboration via documents, data, and on-the-record sources before publication.</li>
+      <li>We minimize sensitive personal data and consider potential harm before publishing.</li>
+      <li>If you provide contact details, we may follow up with questions.</li>
+    </ul>
 
-    <h2>Confidentiality & Security</h2>
-    <p>...</p>
+    <h2>Confidentiality &amp; Security</h2>
+    <p>GlobaLeaks is designed to minimize logs and protect sources. We take reasonable technical and organizational measures to safeguard submissions. Absolute security cannot be guaranteed.</p>
 
     <h2>Retention</h2>
-    <p>...</p>
+    <p>We keep submissions only as long as needed for reporting, legal, security, or archival purposes, after which we delete or further anonymize them.</p>
 
-    <h2>Editorial Independence & Legal</h2>
-    <p>...</p>
+    <h2>Editorial Independence &amp; Legal</h2>
+    <p>Decisions about coverage are made by NewsNowIndy editors in accordance with journalistic standards.</p>
+    <p><strong>Legal:</strong> We comply with applicable U.S. laws and may challenge legal demands for source information where feasible. Nothing here constitutes legal advice.</p>
+
+    <h2>Abuse</h2>
+    <p>We may restrict or remove submissions that are fraudulent, abusive, or outside the public interest.</p>
+
+    <h2>Contact</h2>
+    <p>Tip line: <a href="mailto:tips@newsnowindy.com">tips@newsnowindy.com</a></p>
   </main>
 </body>
 </html>

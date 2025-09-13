@@ -1,5 +1,6 @@
 # policies.py
 from flask import Blueprint, render_template, make_response
+from datetime import date
 
 policies = Blueprint("policies", __name__, url_prefix="/p")
 
@@ -15,8 +16,8 @@ def add_headers(resp):
 
 @policies.route("/whistleblowing-policy")
 def whistle_policy():
-    return make_response(render_template("policies/whistleblowing.html"))
+    return make_response(render_template("policies/whistleblowing.html", last_updated=date.today()))
 
 @policies.route("/privacy")
 def privacy_policy():
-    return make_response(render_template("policies/privacy.html"))
+    return make_response(render_template("policies/privacy.html", last_updated=date.today()))
