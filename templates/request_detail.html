@@ -3,156 +3,339 @@
 <h3>Request {{ r.reference_number }}</h3>
 
 <div class="row g-3">
-  <div class="col-md-8">
 
-    <!-- Agency + Notes inline editor -->
-    <div class="mb-2">
-      <p class="mb-1">
-        <b>Agency:</b> {{ r.agency or '—' }}
-        &nbsp;&nbsp;|&nbsp;&nbsp;
-        <b>Notes:</b> {{ r.snippet or '—' }}
-        <button class="btn btn-sm btn-outline-light ms-2" type="button"
-                data-bs-toggle="collapse" data-bs-target="#editMeta"
-                aria-expanded="false" aria-controls="editMeta">
-          Edit
-        </button>
-      </p>
-      <form method="post" action="{{ url_for('request_set_project', req_id=r.id) }}" class="row g-2 align-items-end mb-3">
-        <div class="col-auto">
-          <label for="project_id" class="form-label mb-0">Project</label>
-          <select name="project_id" id="project_id" class="form-select">
-            <option value="">— None —</option>
-            {% for p in eligible_projects %}
-              <option value="{{ p.id }}" {% if r.project_id == p.id %}selected{% endif %}>
-                {{ p.name }}
-              </option>
-            {% endfor %}
-          </select>
-        </div>
-        <div class="col-auto">
-          <button class="btn btn-primary">Save</button>
-        </div>
-        {% if r.project %}
-          <div class="col-12 mt-2">
-            <small class="text-muted">Current: <a href="{{ url_for('project_detail', slug=r.project.slug) }}">{{ r.project.name }}</a></small>
-          </div>
-        {% endif %}
-      </form>      
-      <div class="collapse" id="editMeta">
-        <form method="post" action="{{ url_for('update_request_meta', req_id=r.id) }}" class="row g-2 mb-3">
-          <div class="col-12 col-md-5">
-            <label class="form-label mb-1">Agency</label>
-            <input type="text" name="agency" class="form-control" placeholder="Enter agency name"
-                   value="{{ r.agency or '' }}" autocomplete="organization">
-          </div>
-          <div class="col-12 col-md-7">
-            <label class="form-label mb-1">Notes</label>
-            <textarea name="notes" class="form-control" rows="2" placeholder="Add notes...">{{ r.snippet or '' }}</textarea>
-          </div>
-          <div class="col-12">
-            <button class="btn btn-primary btn-sm mt-2">Save</button>
-          </div>
-        </form>
-      </div>
-    </div>
+  <!-- LEFT MAIN COLUMN -->
+  <div class="col-12">
 
-    <!-- Dates (MM-DD-YYYY) -->
-    <div class="card bg-secondary-subtle text-dark mb-3">
-      <div class="card-body">
-        <h6 class="card-title">Dates</h6>
-        <form method="post" action="{{ url_for('update_request_dates', req_id=r.id) }}" class="row g-2">
-          <div class="col-12 col-md-4">
-            <label class="form-label">Requested (MM-DD-YYYY)</label>
-            <input type="text" name="requested_date" class="form-control"
-                   placeholder="MM-DD-YYYY"
-                   value="{{ r.request_date|mdy }}">
-          </div>
-          <div class="col-12 col-md-4">
-            <label class="form-label">Completed (MM-DD-YYYY)</label>
-            <input type="text" name="completed_date" class="form-control"
-                   placeholder="MM-DD-YYYY"
-                   value="{{ r.completed_date|mdy }}">
-          </div>
-          <div class="col-12 col-md-4 d-flex align-items-end">
-            <button class="btn btn-primary w-100">Save Dates</button>
-          </div>
-        </form>
-        <small class="text-muted">Tip: You can also leave a field blank to clear it.</small>
-      </div>
-    </div>
+    <!-- Top bar: Agency / Notes / Edit ... with Status summary on the right -->
+    <div class="d-flex justify-content-between align-items-start flex-wrap mb-2">
+      <div class="me-3">
+        <p class="mb-1">
+          <b>Agency:</b> {{ r.agency or '—' }}
+          &nbsp;&nbsp;|&nbsp;&nbsp;
+          <b>Notes:</b> {{ r.snippet or '—' }}
+          <button class="btn btn-sm btn-outline-light ms-2" type="button"
+                  data-bs-toggle="collapse" data-bs-target="#editMeta"
+                  aria-expanded="false" aria-controls="editMeta">
+            Edit
+          </button>
+        </p>
 
-    <!-- Status summary -->
-    <p class="mb-3">
-      <b>Status:</b> {{ r.status.value }}<br>
-      <b>Requested:</b> {{ r.request_date|mdy or '—' }} &nbsp;
-      <b>Completed:</b> {{ r.completed_date|mdy or '—' }}
-    </p>
-
-    <h5>Events</h5>
-    {% if r.events %}
-      <ul class="mb-4">
-        {% for e in r.events|sort(attribute='timestamp') %}
-        <li><b>{{ e.timestamp }}</b> — <code>{{ e.event_type }}</code></li>
-        {% endfor %}
-      </ul>
-    {% else %}
-      <p class="text-muted">No events recorded.</p>
-    {% endif %}
-
-    <h5>PDF Attachments</h5>
-    {% if pdf_attachments and pdf_attachments|length %}
-      <ul class="mb-4">
-        {% for a in pdf_attachments %}
-          <li>
-            {{ a.filename or 'attachment.pdf' }} ({{ a.size or 0 }} bytes)
-            {% if a.ocr_pdf_path %}
-              <a class="btn btn-sm btn-outline-info ms-2" href="{{ url_for('download_ocr', att_id=a.id) }}">Download OCR PDF</a>
-            {% endif %}
-            <a class="btn btn-sm btn-outline-light ms-1" href="{{ url_for('download_attachment', att_id=a.id) }}">
-              Download
-            </a>
-          </li>
-        {% endfor %}
-      </ul>
-    {% else %}
-      <p class="text-muted">No PDF attachments.</p>
-    {% endif %}
-
-  </div>
-
-  <div class="col-md-4">
-    <div class="card bg-secondary-subtle text-dark">
-      <div class="card-body">
-        <h6 class="card-title">Update Status</h6>
-        <form method="post" action="{{ url_for('request_status', req_id=r.id) }}" class="row g-2 align-items-end">
-          <div class="col-12">
-            <label class="form-label">Status</label>
-        
-            <!-- This is what actually gets submitted -->
-            <input type="hidden" name="status" id="status_token" value="{{ r.status.name }}">
-        
-            <!-- This is the visible control -->
-            <select id="status_select" class="form-select form-select-sm"
-                    onchange="document.getElementById('status_token').value=this.value">
-              <option value="PENDING"   {{ 'selected' if r.status.name=='PENDING' }}>Pending</option>
-              <option value="COMPLETED" {{ 'selected' if r.status.name=='COMPLETED' }}>Completed</option>
+        <!-- Project select (unchanged) -->
+        <form method="post" action="{{ url_for('request_set_project', req_id=r.id) }}" class="row g-2 align-items-end mb-3">
+          <div class="col-auto">
+            <label for="project_id" class="form-label mb-0">Project</label>
+            <select name="project_id" id="project_id" class="form-select">
+              <option value="">— None —</option>
+              {% for p in eligible_projects %}
+                <option value="{{ p.id }}" {% if r.project_id == p.id %}selected{% endif %}>
+                  {{ p.name }}
+                </option>
+              {% endfor %}
             </select>
           </div>
-        
-          <div class="col-12">
-            <label class="form-label">Completed (MM-DD-YYYY)</label>
-            <input type="text" name="completed_date" class="form-control form-control-sm"
-                   placeholder="MM-DD-YYYY"
-                   value="{{ r.completed_date|mdy }}">
+          <div class="col-auto">
+            <button class="btn btn-primary">Save</button>
           </div>
-        
-          <div class="col-12 mt-2">
-            <button class="btn btn-primary btn-sm w-100">Save Status</button>
-          </div>
-        </form>           
-        <small class="text-muted">Status form also accepts MM-DD-YYYY.</small>
+          {% if r.project %}
+            <div class="col-12 mt-2">
+              <small class="text-muted">Current: <a href="{{ url_for('project_detail', slug=r.project.slug) }}">{{ r.project.name }}</a></small>
+            </div>
+          {% endif %}
+        </form>
+
+        <!-- Inline editor -->
+        <div class="collapse" id="editMeta">
+          <form method="post" action="{{ url_for('update_request_meta', req_id=r.id) }}" class="row g-2 mb-3">
+            <div class="col-12 col-md-5">
+              <label class="form-label mb-1">Agency</label>
+              <input type="text" name="agency" class="form-control" placeholder="Enter agency name"
+                     value="{{ r.agency or '' }}" autocomplete="organization">
+            </div>
+            <div class="col-12 col-md-7">
+              <label class="form-label mb-1">Notes</label>
+              <textarea name="notes" class="form-control" rows="2" placeholder="Add notes...">{{ r.snippet or '' }}</textarea>
+            </div>
+            <div class="col-12">
+              <button class="btn btn-primary btn-sm mt-2">Save</button>
+            </div>
+          </form>
+        </div>
+      </div>
+
+      <!-- Status summary on the right -->
+      <div class="text-end small mt-1">
+        <div><b>Status:</b> {{ r.status.value }}</div>
+        <div><b>Requested:</b> {{ r.request_date|mdy or '—' }}</div>
+        <div><b>Completed:</b> {{ r.completed_date|mdy or '—' }}</div>
       </div>
     </div>
+
+    <!-- Row: Dates card + Update Status card -->
+    <div class="row g-3">
+      <div class="col-12 col-lg-6">
+        <!-- Dates (MM-DD-YYYY) -->
+        <div class="card bg-secondary-subtle text-dark h-100">
+          <div class="card-body">
+            <h6 class="card-title">Dates</h6>
+            <form method="post" action="{{ url_for('update_request_dates', req_id=r.id) }}" class="row g-2">
+              <div class="col-12 col-md-6">
+                <label class="form-label">Requested (MM-DD-YYYY)</label>
+                <input type="text" name="requested_date" class="form-control"
+                       placeholder="MM-DD-YYYY"
+                       value="{{ r.request_date|mdy }}">
+              </div>
+              <div class="col-12 col-md-6">
+                <label class="form-label">Completed (MM-DD-YYYY)</label>
+                <input type="text" name="completed_date" class="form-control"
+                       placeholder="MM-DD-YYYY"
+                       value="{{ r.completed_date|mdy }}">
+              </div>
+              <div class="col-12">
+                <button class="btn btn-primary w-100">Save Dates</button>
+              </div>
+            </form>
+            <small class="text-muted">Tip: You can also leave a field blank to clear it.</small>
+          </div>
+        </div>
+      </div>
+
+      <div class="col-12 col-lg-6">
+        <!-- Update Status -->
+        <div class="card bg-secondary-subtle text-dark h-100">
+          <div class="card-body">
+            <h6 class="card-title">Update Status</h6>
+            <form method="post" action="{{ url_for('request_status', req_id=r.id) }}" class="row g-2 align-items-end">
+              <div class="col-12">
+                <label class="form-label">Status</label>
+                <!-- Submitted value -->
+                <input type="hidden" name="status" id="status_token" value="{{ r.status.name }}">
+                <!-- Visible control -->
+                <select id="status_select" class="form-select form-select-sm"
+                        onchange="document.getElementById('status_token').value=this.value">
+                  <option value="PENDING"   {{ 'selected' if r.status.name=='PENDING' }}>Pending</option>
+                  <option value="COMPLETED" {{ 'selected' if r.status.name=='COMPLETED' }}>Completed</option>
+                </select>
+              </div>
+              <div class="col-12">
+                <label class="form-label">Completed (MM-DD-YYYY)</label>
+                <input type="text" name="completed_date" class="form-control form-control-sm"
+                       placeholder="MM-DD-YYYY"
+                       value="{{ r.completed_date|mdy }}">
+              </div>
+              <div class="col-12 mt-2">
+                <button class="btn btn-primary btn-sm w-100">Save Status</button>
+              </div>
+            </form>
+            <small class="text-muted">Status form also accepts MM-DD-YYYY.</small>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Follow-Ups (full width) -->
+    <div class="card bg-secondary-subtle text-dark mt-3">
+      <div class="card-body">
+        <h5 class="card-title mb-3">Follow-Ups</h5>
+
+        <!-- Add Follow-Up (wire action when backend exists) -->
+        <form method="post" action="{{ url_for('request_followup_add', req_id=r.id) }}" class="row g-3 mb-3">
+          <!-- TODO: replace action="#" with your endpoint, e.g. url_for('request_followup_add', req_id=r.id) -->
+          <div class="col-12 col-md-3">
+            <label class="form-label">Follow-Up Date (MM-DD-YYYY)</label>
+            <input type="text" name="fu_date" class="form-control" placeholder="MM-DD-YYYY" autocomplete="off">
+          </div>
+          <div class="col-12 col-md-3">
+            <label class="form-label">Method</label>
+            <select name="method" class="form-select">
+              <option value="E-Mail">E-Mail</option>
+              <option value="Phone">Phone</option>
+              <option value="In-Person">In-Person</option>
+            </select>
+          </div>
+          <div class="col-12 col-md-3">
+            <label class="form-label">Reply Received?</label>
+            <select name="reply_received" id="fu_reply" class="form-select"
+                    onchange="document.getElementById('fu_reply_date').disabled = (this.value !== 'Yes');">
+              <option value="No" selected>No</option>
+              <option value="Yes">Yes</option>
+            </select>
+          </div>
+          <div class="col-12 col-md-3">
+            <label class="form-label">Reply Date (MM-DD-YYYY)</label>
+            <input type="text" name="reply_date" id="fu_reply_date" class="form-control" placeholder="MM-DD-YYYY" disabled>
+          </div>
+          <div class="col-12">
+            <label class="form-label">Notes</label>
+            <textarea name="notes" class="form-control" rows="2" placeholder="Add notes about this follow-up..."></textarea>
+          </div>
+          <div class="col-12">
+            <button class="btn btn-primary">Add Follow-Up</button>
+          </div>
+        </form>
+
+        <!-- Follow-Ups Table -->
+        {% set items = (r.followups or []) %}
+        {% if items %}
+          {% set sorted_items = items|sort(attribute='fu_date', reverse=True) %}
+          <div class="table-responsive">
+            <table class="table table-sm table-dark align-middle mb-0">
+              <thead>
+                <tr>
+                  <th scope="col">Date</th>
+                  <th scope="col">Method</th>
+                  <th scope="col">Reply</th>
+                  <th scope="col">Reply Date</th>
+                  <th scope="col">Notes</th>
+                  <th scope="col">Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for f in sorted_items %}
+                  <tr>
+                    <td>{{ f.fu_date|mdy }}</td>
+                    <td>{{ f.method }}</td>
+                    <td>
+                      {% if f.reply_received %}
+                        <span class="badge bg-success">Received</span>
+                      {% else %}
+                        <span class="badge bg-secondary">No</span>
+                      {% endif %}
+                    </td>
+                    <td>{{ f.reply_date|mdy or '—' }}</td>
+                    <td class="text-break">{{ f.notes or '' }}</td>
+                    <td class="text-end">
+                      <button type="button"
+                              class="btn btn-sm btn-outline-light me-1"
+                              data-bs-toggle="modal"
+                              data-bs-target="#fuEdit-{{ f.id }}">
+                        Edit
+                      </button>
+                      <form method="post" action="{{ url_for('request_followup_delete', req_id=r.id, fu_id=f.id) }}"
+                            onsubmit="return confirm('Delete this follow-up?');">
+                        <button class="btn btn-sm btn-outline-danger">Delete</button>
+                      </form>
+                    </td>
+                  </tr>
+                  <!-- Edit Follow-Up Modal -->
+                  <div class="modal fade" id="fuEdit-{{ f.id }}" tabindex="-1" aria-hidden="true">
+                    <div class="modal-dialog modal-lg">
+                      <div class="modal-content text-dark">
+                        <form method="post"
+                              action="{{ url_for('request_followup_update', req_id=r.id, fu_id=f.id) }}">
+                          <div class="modal-header">
+                            <h5 class="modal-title">Edit Follow-Up</h5>
+                            <button type="button" class="btn-close" data-bs-dismiss="modal"
+                                    aria-label="Close"></button>
+                          </div>
+
+                          <div class="modal-body">
+                            <div class="row g-3">
+                              <div class="col-12 col-md-3">
+                                <label class="form-label">Follow-Up Date (MM-DD-YYYY)</label>
+                                <input type="text" name="fu_date" class="form-control"
+                                      value="{{ f.fu_date|mdy }}" placeholder="MM-DD-YYYY">
+                              </div>
+
+                              <div class="col-12 col-md-3">
+                                <label class="form-label">Method</label>
+                                <select name="method" class="form-select">
+                                  <option value="E-Mail"   {{ 'selected' if f.method=='E-Mail' }}>E-Mail</option>
+                                  <option value="Phone"    {{ 'selected' if f.method=='Phone' }}>Phone</option>
+                                  <option value="In-Person"{{ 'selected' if f.method=='In-Person' }}>In-Person</option>
+                                </select>
+                              </div>
+
+                              <div class="col-12 col-md-3">
+                                <label class="form-label">Reply Received?</label>
+                                <select name="reply_received" id="fu_reply_{{ f.id }}" class="form-select"
+                                        onchange="document.getElementById('fu_reply_date_{{ f.id }}').disabled = (this.value !== 'Yes');">
+                                  <option value="No"  {{ 'selected' if not f.reply_received }}>No</option>
+                                  <option value="Yes" {{ 'selected' if f.reply_received }}>Yes</option>
+                                </select>
+                              </div>
+
+                              <div class="col-12 col-md-3">
+                                <label class="form-label">Reply Date (MM-DD-YYYY)</label>
+                                <input type="text" name="reply_date" id="fu_reply_date_{{ f.id }}"
+                                      class="form-control" placeholder="MM-DD-YYYY"
+                                      value="{{ f.reply_date|mdy }}"
+                                      {% if not f.reply_received %}disabled{% endif %}>
+                              </div>
+
+                              <div class="col-12">
+                                <label class="form-label">Notes</label>
+                                <textarea name="notes" class="form-control" rows="3"
+                                          placeholder="Add notes...">{{ f.notes or '' }}</textarea>
+                              </div>
+                            </div>
+                          </div>
+
+                          <div class="modal-footer">
+                            <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                            <button class="btn btn-primary">Save Changes</button>
+                          </div>
+                        </form>
+                      </div>
+                    </div>
+                  </div>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+        {% else %}
+          <p class="text-muted mb-0">No follow-ups yet.</p>
+        {% endif %}
+      </div>
+    </div>
+
+    <!-- PDF Attachments (list + upload) -->
+    <div class="mt-4">
+      <h5>PDF Attachments</h5>
+
+      <!-- Upload PDFs (wire action when backend exists) -->
+      <form method="post" action="{{ url_for('request_attachment_upload', req_id=r.id) }}"
+            enctype="multipart/form-data" class="mb-3">
+        <div class="input-group">
+          <input type="file" name="files[]" accept="application/pdf" class="form-control" multiple>
+          <button class="btn btn-outline-primary" type="submit">Upload PDFs</button>
+        </div>
+        <small class="text-muted">PDFs only. Multiple files allowed.</small>
+      </form>
+
+      {% if pdf_attachments and pdf_attachments|length %}
+        <ul class="mb-4">
+          {% for a in pdf_attachments %}
+            <li class="mb-1">
+              {{ a.filename or 'attachment.pdf' }} ({{ a.size or 0 }} bytes)
+              {% if a.ocr_pdf_path %}
+                <a class="btn btn-sm btn-outline-info ms-2" href="{{ url_for('download_ocr', att_id=a.id) }}">Download OCR PDF</a>
+              {% endif %}
+              <a class="btn btn-sm btn-outline-light ms-1" href="{{ url_for('download_attachment', att_id=a.id) }}">
+                Download
+              </a>
+            </li>
+          {% endfor %}
+        </ul>
+      {% else %}
+        <p class="text-muted">No PDF attachments.</p>
+      {% endif %}
+    </div>
+
+    <!-- Events at bottom -->
+    <div class="mt-4">
+      <h5>Events</h5>
+      {% if r.events %}
+        <ul class="mb-4">
+          {% for e in r.events|sort(attribute='timestamp') %}
+          <li><b>{{ e.timestamp }}</b> — <code>{{ e.event_type }}</code></li>
+          {% endfor %}
+        </ul>
+      {% else %}
+        <p class="text-muted">No events recorded.</p>
+      {% endif %}
+    </div>
+
   </div>
 </div>
 {% endblock %}

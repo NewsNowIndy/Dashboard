@@ -16,7 +16,7 @@ from models import (
     init_db, SessionLocal, engine,
     FoiaRequest, FoiaAttachment, RequestStatus, CourtCase, FoiaEvent, SurroundingCase,
     ProjectDocument, Project, ProjectNote, ProjectStatus,
-    WorkbenchDataset, WorkbenchRecordLink, WorkbenchPdfLink, MediaItem, CaseNotebookEntry,
+    WorkbenchDataset, WorkbenchRecordLink, WorkbenchPdfLink, MediaItem, CaseNotebookEntry, FoiaFollowUp,
 )
 from utils import decrypt_file_to_bytes, normalize_request_status, days_until, age_in_days, badge_for_days_left, badge_for_requested_age, send_email
 from sheets_ingest import import_cases_from_csv, import_cases_from_gsheet, import_surrounding_cases_from_csv, import_surrounding_cases_from_gsheet
@@ -378,6 +378,11 @@ def abs_url(endpoint, **values):
 def robots_txt():
     return send_from_directory(app.static_folder, "robots.txt", mimetype="text/plain")
 
+_ALLOWED_FU_METHODS = {"E-Mail", "Phone", "In-Person"}
+
+def _parse_bool(val) -> bool:
+    return str(val).lower() in {"1", "true", "on", "yes", "y"}
+
 # -----------------------------
 # FOIA: Home / Search (sorted by Reference # desc)
 # -----------------------------
@@ -524,11 +529,12 @@ def new_request():
         db = SessionLocal()
         try:
             status_token = normalize_request_status(request.form.get("status", "Pending"))  # -> 'PENDING' or 'COMPLETED'
+            new_status = RequestStatus.__members__.get(status_token) or RequestStatus.PENDING
             fr = FoiaRequest(
                 reference_number=request.form["reference_number"].strip(),
                 agency=request.form.get("agency"),
                 request_date=datetime.strptime(request.form["request_date"], "%Y-%m-%d").date(),
-                status=RequestStatus[status_token],   # <-- by NAME
+                status=new_status,
                 subject="Manual entry",
                 snippet=request.form.get("notes", "")
             )
@@ -695,6 +701,208 @@ def request_delete(req_id):
         db.commit()
         flash("Request deleted.")
         return redirect(url_for("home"))
+    finally:
+        db.close()
+
+@app.post("/requests/<int:req_id>/followups/add")
+@login_required
+def request_followup_add(req_id: int):
+    db = SessionLocal()
+    try:
+        r = db.get(FoiaRequest, req_id)
+        if not r:
+            flash("Request not found.")
+            return redirect(url_for("home"))
+
+        fu_date = _parse_date_any(request.form.get("fu_date"))
+        method = (request.form.get("method") or "E-Mail").strip()
+        if method not in _ALLOWED_FU_METHODS:
+            flash("Invalid follow-up method.", "warning")
+            return redirect(url_for("request_detail", req_id=req_id))
+
+        reply_received = _parse_bool(request.form.get("reply_received"))
+        reply_date = _parse_date_any(request.form.get("reply_date"))
+        if not reply_received:
+            reply_date = None
+        notes = (request.form.get("notes") or "").strip() or None
+
+        # If reply_received is false, ignore reply_date
+        if not reply_received:
+            reply_date = None
+
+        fu = FoiaFollowUp(
+            foia_request_id=r.id,
+            fu_date=fu_date,
+            method=method,
+            reply_received=reply_received,
+            reply_date=reply_date,
+            notes=notes,
+        )
+        db.add(fu)
+        db.commit()
+
+        try:
+            emit("foia.followup_added", foia_request_id=r.id, followup_id=fu.id, method=method)
+        except Exception:
+            app.logger.exception("emit(foia.followup_added) failed for foia_request_id=%s", r.id)
+
+        flash("Follow-up added.")
+        return redirect(url_for("request_detail", req_id=req_id))
+    finally:
+        db.close()
+
+@app.post("/requests/<int:req_id>/followups/<int:fu_id>/update")
+@login_required
+def request_followup_update(req_id: int, fu_id: int):
+    from models import FoiaFollowUp  # ensure model is imported
+
+    db = SessionLocal()
+    try:
+        r = db.get(FoiaRequest, req_id)
+        if not r:
+            flash("Request not found.")
+            return redirect(url_for("home"))
+
+        f = db.get(FoiaFollowUp, fu_id)
+        if not f or f.foia_request_id != r.id:
+            flash("Follow-up not found.")
+            return redirect(url_for("request_detail", req_id=req_id))
+
+        f.fu_date = _parse_date_any(request.form.get("fu_date"))
+        f.method = (request.form.get("method") or "E-Mail").strip()
+
+        rr = (request.form.get("reply_received") or "No").strip()
+        f.reply_received = (rr.lower() == "yes")
+        f.reply_date = _parse_date_any(request.form.get("reply_date")) if f.reply_received else None
+
+        f.notes = (request.form.get("notes") or "").strip() or None
+
+        db.commit()
+        flash("Follow-up updated.")
+        return redirect(url_for("request_detail", req_id=req_id))
+    finally:
+        db.close()
+
+@app.post("/requests/<int:req_id>/followups/<int:fu_id>/delete")
+@login_required
+def request_followup_delete(req_id: int, fu_id: int):
+    db = SessionLocal()
+    try:
+        r = db.get(FoiaRequest, req_id)
+        if not r:
+            flash("Request not found.")
+            return redirect(url_for("home"))
+
+        fu = db.get(FoiaFollowUp, fu_id)
+        if not fu or fu.foia_request_id != r.id:
+            flash("Follow-up not found.")
+            return redirect(url_for("request_detail", req_id=req_id))
+
+        db.delete(fu)
+        db.commit()
+        flash("Follow-up deleted.")
+        return redirect(url_for("request_detail", req_id=req_id))
+    finally:
+        db.close()
+
+@app.post("/requests/<int:req_id>/attachments/upload")
+@login_required
+def request_attachment_upload(req_id: int):
+    # Require multipart
+    ctype = request.headers.get("Content-Type", "")
+    if "multipart/form-data" not in (ctype or "").lower():
+        flash("Upload failed: form encoding missing (multipart/form-data).", "warning")
+        return redirect(url_for("request_detail", req_id=req_id))
+
+    db = SessionLocal()
+    try:
+        r = db.get(FoiaRequest, req_id)
+        if not r:
+            flash("Request not found.")
+            return redirect(url_for("home"))
+
+        from werkzeug.exceptions import BadRequest
+        try:
+            files = request.files.getlist("files[]") or request.files.getlist("files")
+        except (BadRequest, ClientDisconnected):
+            app.logger.exception("Upload aborted while parsing form data")
+            flash("Upload aborted while sending files.", "warning")
+            return redirect(url_for("request_detail", req_id=req_id))
+
+        if not files:
+            flash("Choose one or more PDFs to upload.", "warning")
+            return redirect(url_for("request_detail", req_id=req_id))
+
+        dest_dir = os.path.join(Config.DATA_DIR, "foia_attachments", str(r.id))
+        os.makedirs(dest_dir, exist_ok=True)
+
+        uploaded, skipped = 0, []
+
+        for f in files:
+            if not f or not f.filename:
+                continue
+
+            filename = secure_filename(f.filename)
+            if not filename.lower().endswith(".pdf"):
+                skipped.append(f"{filename} (not a PDF)")
+                continue
+
+            stored_path = os.path.join(dest_dir, filename)
+            base, ext = os.path.splitext(filename)
+            i = 1
+            while os.path.exists(stored_path):
+                filename = f"{base}-{i}{ext}"
+                stored_path = os.path.join(dest_dir, filename)
+                i += 1
+
+            try:
+                f.save(stored_path)
+            except Exception:
+                app.logger.exception("Error saving %r", filename)
+                skipped.append(f"{filename} (save error)")
+                continue
+
+            # File stats
+            try:
+                size = os.path.getsize(stored_path)
+            except Exception:
+                size = 0
+
+            # Try to see if it already has text; if not, make a searchable copy
+            ocr_pdf_path = None
+            try:
+                pre_txt = extract_pdf_text(stored_path, ocr_fallback=False) or ""
+                if len(pre_txt.strip()) < 20:
+                    # Make searchable copy
+                    ocr_out = make_searchable_pdf(stored_path, lang="eng")
+                    if ocr_out and os.path.exists(ocr_out) and ocr_out != stored_path:
+                        # keep original at stored_path, put OCR copy beside it
+                        ocr_pdf_path = os.path.join(dest_dir, f"OCR-{filename}")
+                        try:
+                            os.replace(ocr_out, ocr_pdf_path)
+                        except Exception:
+                            # best-effort; if replace fails, keep ocr_out path
+                            ocr_pdf_path = ocr_out
+            except Exception:
+                app.logger.exception("OCR check failed for %r", stored_path)
+
+            att = FoiaAttachment(
+                foia_request_id=r.id,
+                filename=filename,
+                stored_path=stored_path,
+                ocr_pdf_path=ocr_pdf_path,
+                mime_type="application/pdf",
+                size=size,
+            )
+            db.add(att)
+            uploaded += 1
+
+        db.commit()
+        msg = []
+        if uploaded: msg.append(f"Uploaded {uploaded} PDF{'s' if uploaded!=1 else ''}.")
+        if skipped:  msg.append("Skipped: " + "; ".join(skipped))
+        flash(" ".join(msg) if msg else "No files processed.")
+        return redirect(url_for("request_detail", req_id=req_id))
     finally:
         db.close()
 

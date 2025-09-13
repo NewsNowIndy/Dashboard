@@ -43,6 +43,12 @@ class FoiaRequest(Base):
     attachments = relationship("FoiaAttachment", back_populates="request", cascade="all, delete-orphan")
     project_id = Column(Integer, ForeignKey("projects.id"), nullable=True)
     project = relationship("Project", backref="foia_requests")
+    followups = relationship(
+        "FoiaFollowUp",
+        back_populates="request",
+        cascade="all, delete-orphan",
+        order_by="desc(FoiaFollowUp.fu_date), desc(FoiaFollowUp.id)"
+    )
 
 class FoiaEvent(Base):
     __tablename__ = 'foia_events'
@@ -258,6 +264,31 @@ class CaseNotebookEntry(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
 
     project = relationship("Project", backref="notebook_entries")
+
+class FoiaFollowUp(Base):
+    __tablename__ = "foia_followups"
+
+    id = Column(Integer, primary_key=True)
+    foia_request_id = Column(Integer, ForeignKey("foia_requests.id"), nullable=False, index=True)
+
+    # When you followed up (email/phone/in-person)
+    fu_date = Column(Date, nullable=True)
+
+    # Keep this a plain String for portability; we validate in the view.
+    # Allowed: "E-Mail", "Phone", "In-Person"
+    method = Column(String(20), nullable=False, default="E-Mail")
+
+    # Reply tracking
+    reply_received = Column(Boolean, nullable=False, default=False)
+    reply_date = Column(Date, nullable=True)
+
+    notes = Column(Text, nullable=True)
+
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    updated_at = Column(DateTime, nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    # Relationship back to FoiaRequest
+    request = relationship("FoiaRequest", back_populates="followups")
 
 def init_db():
     Base.metadata.create_all(engine)
