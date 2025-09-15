@@ -82,6 +82,35 @@
   </div>
 </div>
 
+<div class="card mt-3">
+  <div class="card-header d-flex justify-content-between align-items-center">
+    <strong>Tips</strong>
+    <a class="btn btn-sm btn-outline-primary" href="{{ url_for('tips.index') }}">Open Tips</a>
+  </div>
+  <div class="card-body p-0">
+    {% if tips and tips|length %}
+      <div class="table-responsive">
+        <table class="table table-sm table-hover mb-0 align-middle">
+          <thead class="table-dark"><tr><th>Title</th><th class="d-none d-md-table-cell">Status</th><th style="width:160px;" class="text-end">Actions</th></tr></thead>
+          <tbody>
+          {% for t in tips %}
+            <tr>
+              <td class="text-wrap">{{ t.title or 'Untitled Tip' }}</td>
+              <td class="d-none d-md-table-cell">{{ t.status or '—' }}</td>
+              <td class="text-end">
+                <a class="btn btn-sm btn-outline-info" href="{{ url_for('tips.view', tip_id=t.id) }}">Open</a>
+              </td>
+            </tr>
+          {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    {% else %}
+      <div class="p-3"><div class="alert alert-secondary mb-0">No tips linked yet.</div></div>
+    {% endif %}
+  </div>
+</div>
+
 <!-- Case Notebook -->
 <div class="card mt-3">
   <div class="card-header d-flex justify-content-between align-items-center">

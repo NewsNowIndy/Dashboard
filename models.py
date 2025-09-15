@@ -290,5 +290,18 @@ class FoiaFollowUp(Base):
     # Relationship back to FoiaRequest
     request = relationship("FoiaRequest", back_populates="followups")
 
+class Tip(Base):
+    __tablename__ = "tips"
+    id = Column(Integer, primary_key=True)
+    glk_id = Column(String, unique=True, index=True, nullable=False)   # Globaleaks tip id
+    status = Column(String(40))                                        # e.g., 'new','open','closed'
+    title = Column(String(255))
+    summary = Column(Text)                                             # short text / first lines
+    created_at = Column(DateTime, default=datetime.utcnow, index=True)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    project_id = Column(Integer, ForeignKey("projects.id"), nullable=True)
+
+    project = relationship("Project", lazy="joined")
+
 def init_db():
     Base.metadata.create_all(engine)

@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="container mt-4">
+  <div class="d-flex justify-content-between align-items-center mb-3">
+    <h2>Tips</h2>
+    <form action="{{ url_for('tips.sync_now') }}" method="post">
+      <button class="btn btn-sm btn-primary">Sync Now</button>
+    </form>
+  </div>
+
+  {% if tips %}
+  <table class="table table-striped">
+    <thead>
+      <tr>
+        <th>Created</th>
+        <th>Title</th>
+        <th>Status</th>
+        <th>Project</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for t in tips %}
+      <tr>
+        <td>{{ t.created_at|localfmt }}</td>
+        <td><a href="{{ url_for('tips.detail', glk_id=t.glk_id) }}">{{ t.title or ('Tip ' ~ t.glk_id) }}</a></td>
+        <td>{{ t.status or '' }}</td>
+        <td>
+          {% if t.project %}
+            <a href="{{ url_for('project_detail', slug=t.project.slug) }}">{{ t.project.name }}</a>
+          {% else %}
+            —
+          {% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+    <p>No tips yet. Click <em>Sync Now</em> to pull from GlobaLeaks.</p>
+  {% endif %}
+</div>
+{% endblock %}
