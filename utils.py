@@ -40,8 +40,8 @@ def badge_for_days_left(n: int | None) -> str:
 def badge_for_requested_age(n: int | None) -> str:
     # yellow if >21, red if >30
     if n is None: return "bg-secondary"
-    if n > 30: return "bg-danger"
-    if n > 21: return "bg-warning text-dark"
+    if n > 21: return "bg-danger"
+    if n > 14: return "bg-warning text-dark"
     return "bg-secondary"
 
 def _as_sms_text(subject: str, body: str) -> str:
