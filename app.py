@@ -42,7 +42,6 @@ import listeners_signal
 from models import ensure_av_fts
 from policies import policies
 from routes_tips import bp as bp_tips
-from tip_helpers import derive_titles_for_missing
 
 @event.listens_for(Engine, "connect")
 def _sqlite_pragmas(dbapi_conn, _):
@@ -1580,7 +1579,7 @@ def project_detail(slug):
             .order_by(Tip.created_at.desc())
             .all()
         )
-
+        from tip_helpers import derive_titles_for_missing
         derived_titles = derive_titles_for_missing(tips)
 
         return render_template(

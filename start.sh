@@ -72,4 +72,4 @@ print("torch:",     "ok" if ok("torch")     else "missing")
 PY
 
 # Bind to $PORT for Render
-exec "$PYBIN" -m gunicorn app:app --bind "0.0.0.0:${PORT}"
+exec "$PYBIN" -m gunicorn app:app --bind 0.0.0.0:${PORT:-10000}
