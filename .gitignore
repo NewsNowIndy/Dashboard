@@ -26,3 +26,11 @@ htmlcov/
 .DS_Store
 .vscode/
 .idea/
+
+# OAuth/credentials
+credentials.json
+token.json
+
+# Cookies/session
+cookies.txt
+gl.cookies
