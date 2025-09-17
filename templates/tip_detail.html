@@ -1,0 +1,66 @@
+{# templates/tip_detail.html #}
+{% extends "base.html" %}
+{% block content %}
+<div class="container mt-4">
+  <div class="d-flex justify-content-between align-items-center">
+    <div>
+      <h2 class="mb-0">
+        {{ title_text or tip.title or ('Tip ' ~ (tip.glk_id or tip.id)) }}
+      </h2>
+      <div class="text-muted small">ID: {{ tip.glk_id or tip.id }}</div>
+    </div>
+    <a class="btn btn-secondary btn-sm" href="{{ url_for('tips.index') }}">Back</a>
+  </div>
+
+  <div class="mt-3">
+    <div><strong>Status:</strong> {{ tip.status | default('—') }}</div>
+
+    <div><strong>Created:</strong>
+      {% if tip.created_at is defined and tip.created_at %}
+        {{ tip.created_at|localfmt }}
+      {% elif tip.creation_date is defined and tip.creation_date %}
+        {{ tip.creation_date }}
+      {% elif tip.created_at_str is defined and tip.created_at_str %}
+        {{ tip.created_at_str }}
+      {% else %}
+        —
+      {% endif %}
+    </div>
+
+    <div class="mt-2">
+      <strong>Summary:</strong>
+      {% if summary_text %}
+        <div style="white-space: pre-wrap;">
+          {{ summary_text | urlize(target='_blank', rel='noopener') }}
+        </div>
+      {% else %}
+        —
+      {% endif %}
+    </div>
+  </div>
+
+  <hr>
+  <form class="row g-2" action="{{ url_for('tips.set_project', glk_id=(tip.glk_id or tip.id)) }}" method="post">
+    <div class="col-auto"><label class="col-form-label"><strong>Project:</strong></label></div>
+    <div class="col-auto">
+      <select name="project_id" class="form-select form-select-sm">
+        <option value="">(none)</option>
+        {% for p in projects %}
+          <option value="{{ p.id }}" {% if tip.project_id is defined and tip.project_id == p.id %}selected{% endif %}>
+            {{ p.name }}
+          </option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="col-auto"><button class="btn btn-sm btn-primary">Save</button></div>
+  </form>
+
+  <hr>
+  <h5>Live GlobaLeaks Data</h5>
+  {% if detail %}
+    <pre style="white-space: pre-wrap;">{{ detail | tojson(indent=2) }}</pre>
+  {% else %}
+    <p class="text-muted">No live data available.</p>
+  {% endif %}
+</div>
+{% endblock %}

@@ -1,0 +1,90 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="container mt-4">
+  <div class="d-flex justify-content-between align-items-center mb-3">
+    <h2>Tips</h2>
+
+    <!-- Sync button opens modal -->
+    <button type="button" class="btn btn-sm btn-primary" data-bs-toggle="modal" data-bs-target="#glSessionModal">
+      Sync Now
+    </button>
+  </div>
+
+  {% if tips %}
+  <table class="table table-striped">
+    <thead>
+      <tr>
+        <th>Created</th>
+        <th>Title</th>
+        <th>Status</th>
+        <th>Project</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for t in tips %}
+      <tr>
+        <td>{{ t.created_at|localfmt }}</td>
+        <td>
+          <a href="{{ url_for('tips.detail', tip_id=t.glk_id) }}">
+            {{ (derived_titles.get(t.glk_id) if derived_titles else None) or t.title or ('Tip ' ~ t.glk_id) }}
+          </a>
+        </td>
+        <td>{{ t.status or '' }}</td>
+        <td>
+          {% if t.project %}
+            <a href="{{ url_for('project_detail', slug=t.project.slug) }}">{{ t.project.name }}</a>
+          {% else %}
+            —
+          {% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+    <p>No tips yet. Click <em>Sync Now</em> to pull from GlobaLeaks.</p>
+  {% endif %}
+</div>
+
+<!-- GlobaLeaks Session Modal -->
+<div class="modal fade" id="glSessionModal" tabindex="-1" aria-labelledby="glSessionLabel" aria-hidden="true">
+  <div class="modal-dialog">
+    <form action="{{ url_for('tips.sync_now') }}" method="post" class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title" id="glSessionLabel">GlobaLeaks Session</h5>
+        <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
+      </div>
+
+      <div class="modal-body">
+        {% if gl_session_present %}
+          <div class="alert alert-secondary">
+            A session is already set for this process. You can just click <strong>Sync</strong>, or paste a new Session ID below to override it.
+          </div>
+        {% else %}
+          <p class="text-muted mb-2">
+            Paste your GlobaLeaks Session ID (cookie) below. We’ll use it immediately to sync.
+          </p>
+        {% endif %}
+
+        <div class="mb-3">
+          <label for="session_id" class="form-label">Session ID</label>
+          <input type="text" name="session_id" id="session_id" class="form-control" autocomplete="off" placeholder="Paste session id (optional if already set)">
+          <div class="form-text">This is the value of the GlobaLeaks session cookie you copied from the browser.</div>
+        </div>
+
+        <div class="form-check">
+          <input class="form-check-input" type="checkbox" value="1" id="remember" name="remember">
+          <label class="form-check-label" for="remember">
+            Remember in <code>.env</code> for next time
+          </label>
+        </div>
+      </div>
+
+      <div class="modal-footer">
+        <button type="submit" class="btn btn-primary">Save & Sync</button>
+        <button type="button" class="btn btn-ghost" data-bs-dismiss="modal">Cancel</button>
+      </div>
+    </form>
+  </div>
+</div>
+{% endblock %}

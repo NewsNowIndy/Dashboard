@@ -63,3 +63,8 @@ class Config:
 
     # Optional: used by abs_url() helper
     APP_BASE_URL = os.getenv("APP_BASE_URL", "")
+    GLOBALEAKS_BASE_URL = os.getenv("GLOBALEAKS_BASE_URL", "")
+    GLOBALEAKS_USERNAME = os.getenv("GLOBALEAKS_USERNAME", "")
+    GLOBALEAKS_PASSWORD = os.getenv("GLOBALEAKS_PASSWORD", "")
+    GLOBALEAKS_API_TOKEN = os.getenv("GLOBALEAKS_API_TOKEN", "")
+    TOR_SOCKS_PROXY = os.getenv("TOR_SOCKS_PROXY", "")

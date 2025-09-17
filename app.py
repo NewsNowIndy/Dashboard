@@ -16,7 +16,7 @@ from models import (
     init_db, SessionLocal, engine,
     FoiaRequest, FoiaAttachment, RequestStatus, CourtCase, FoiaEvent, SurroundingCase,
     ProjectDocument, Project, ProjectNote, ProjectStatus,
-    WorkbenchDataset, WorkbenchRecordLink, WorkbenchPdfLink, MediaItem, CaseNotebookEntry, FoiaFollowUp,
+    WorkbenchDataset, WorkbenchRecordLink, WorkbenchPdfLink, MediaItem, CaseNotebookEntry, FoiaFollowUp, Tip
 )
 from utils import decrypt_file_to_bytes, normalize_request_status, days_until, age_in_days, badge_for_days_left, badge_for_requested_age, send_email
 from sheets_ingest import import_cases_from_csv, import_cases_from_gsheet, import_surrounding_cases_from_csv, import_surrounding_cases_from_gsheet
@@ -41,6 +41,8 @@ from routes_media import bp as bp_media
 import listeners_signal
 from models import ensure_av_fts
 from policies import policies
+from routes_tips import bp as bp_tips
+from tip_helpers import derive_titles_for_missing
 
 @event.listens_for(Engine, "connect")
 def _sqlite_pragmas(dbapi_conn, _):
@@ -92,12 +94,11 @@ app.register_blueprint(bp_calendar)
 app.register_blueprint(bp_auth, url_prefix="")
 app.register_blueprint(bp_notebook)
 app.register_blueprint(policies)
+app.register_blueprint(bp_tips)
 
 ensure_fts_tables(engine)
 
 ensure_av_fts(engine)
-
-start_scheduler(app)
 
 # Ensure uploads dir exists
 os.makedirs(Config.DATA_DIR, exist_ok=True)
@@ -108,6 +109,12 @@ os.makedirs(Config.WORKBENCH_DIR, exist_ok=True)
 # -----------------------------
 # Helpers
 # -----------------------------
+
+@app.cli.command("tips-sync")
+def tips_sync_cmd():
+    from tips_sync import sync_once
+    ins, upd = sync_once()
+    print(f"Synchronized tips: +{ins} new, {upd} updated")
 
 @app.cli.command("signal-env")
 def signal_env():
@@ -1567,11 +1574,19 @@ def project_detail(slug):
             .limit(200)
             .all()
         )
+        tips = (
+            db.query(Tip)
+            .filter(Tip.project_id == p.id)
+            .order_by(Tip.created_at.desc())
+            .all()
+        )
+
+        derived_titles = derive_titles_for_missing(tips)
 
         return render_template(
             "project_detail.html",
             project=p, notes=notes, docs=docs, datasets=datasets,
-            media=media, notebook=notebook  # <-- pass through
+            media=media, notebook=notebook, tips=tips, derived_titles=derived_titles  # <-- pass through
         )
     finally:
         db.close()
@@ -2411,5 +2426,7 @@ def entities_rebuild():
 # Entrypoint
 # -----------------------------
 if __name__ == "__main__":
+    if os.environ.get("WERKZEUG_RUN_MAIN") == "true" or os.getenv("APP_ENV", "").lower() == "prod":
+        start_scheduler(app)
     # If AirPlay is using 5000 on macOS, change port here (e.g., 5001)
     app.run(debug=True, host="0.0.0.0", port=5000)
