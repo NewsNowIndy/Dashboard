@@ -91,14 +91,24 @@
     {% if tips and tips|length %}
       <div class="table-responsive">
         <table class="table table-sm table-hover mb-0 align-middle">
-          <thead class="table-dark"><tr><th>Title</th><th class="d-none d-md-table-cell">Status</th><th style="width:160px;" class="text-end">Actions</th></tr></thead>
+          <thead class="table-dark">
+            <tr>
+              <th>Title</th>
+              <th class="d-none d-md-table-cell">Status</th>
+              <th style="width:160px;" class="text-end">Actions</th>
+            </tr>
+          </thead>
           <tbody>
           {% for t in tips %}
             <tr>
-              <td class="text-wrap">{{ t.title or 'Untitled Tip' }}</td>
+              <td class="text-wrap">
+                {{ t.title
+                   or (derived_titles.get(t.glk_id) if derived_titles is defined else None)
+                   or 'Untitled Tip' }}
+              </td>
               <td class="d-none d-md-table-cell">{{ t.status or '—' }}</td>
               <td class="text-end">
-                <a class="btn btn-sm btn-outline-info" href="{{ url_for('tips.view', tip_id=t.id) }}">Open</a>
+                <a class="btn btn-sm btn-outline-info" href="{{ url_for('tips.detail', tip_id=(t.glk_id or t.id)) }}">Open</a>
               </td>
             </tr>
           {% endfor %}

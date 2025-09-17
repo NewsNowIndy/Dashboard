@@ -131,16 +131,29 @@
     color: var(--text) !important;
   }
   
-  /* Tables */
   .table {
     --bs-table-bg: transparent;
     --bs-table-color: var(--text);
     --bs-table-border-color: var(--border);
-    color: var(--text);
+  
+    /* Ensure striped rows keep light text */
+    --bs-table-striped-bg: var(--table-stripe);
+    --bs-table-striped-color: var(--text);
   }
+  
   .table thead th {
-    color: #FFFFFF(--text);
+    color: var(--text); /* fix typo: was `#FFFFFF(--text)` */
     border-bottom-color: var(--border);
+  }
+  
+  /* Apply the striped text color to the actual cells */
+  .table-striped > tbody > tr:nth-of-type(odd) > * {
+    color: var(--bs-table-striped-color) !important;
+  }
+  
+  /* And keep non-striped rows consistent too */
+  .table > tbody > tr > * {
+    color: var(--bs-table-color) !important;
   }
   .table tbody tr { border-color: var(--border); }
   .table-hover tbody tr:hover { background: var(--bg-hover); }

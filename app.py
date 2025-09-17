@@ -42,6 +42,7 @@ import listeners_signal
 from models import ensure_av_fts
 from policies import policies
 from routes_tips import bp as bp_tips
+from tip_helpers import derive_titles_for_missing
 
 @event.listens_for(Engine, "connect")
 def _sqlite_pragmas(dbapi_conn, _):
@@ -1580,10 +1581,12 @@ def project_detail(slug):
             .all()
         )
 
+        derived_titles = derive_titles_for_missing(tips)
+
         return render_template(
             "project_detail.html",
             project=p, notes=notes, docs=docs, datasets=datasets,
-            media=media, notebook=notebook, tips=tips  # <-- pass through
+            media=media, notebook=notebook, tips=tips, derived_titles=derived_titles  # <-- pass through
         )
     finally:
         db.close()

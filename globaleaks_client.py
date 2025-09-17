@@ -1,7 +1,12 @@
-# globaleaks_client.py — login via cURL (auth paths), data via requests
+# enhanced_globaleaks_client.py - Improved error handling and debugging
 import os, json, base64, random, subprocess, shlex, shutil, requests
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Sequence
 from argon2.low_level import hash_secret_raw, Type as Argon2Type
+import time
+import tempfile
+from urllib.parse import urlparse
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
 BASE = (os.getenv("GLOBALEAKS_BASE_URL", "") or "").rstrip("/")
 USER = os.getenv("GLOBALEAKS_USERNAME", "")
@@ -9,6 +14,11 @@ PASS = os.getenv("GLOBALEAKS_PASSWORD", "")
 AUTHCODE = os.getenv("GLOBALEAKS_AUTHCODE", "")  # usually empty
 DEBUG = os.getenv("GLOBALEAKS_DEBUG", "0") not in ("", "0", "false", "False")
 CURL_BIN = os.getenv("CURL_BIN") or shutil.which("curl") or "curl"
+
+# Increased timeouts for better reliability
+CONNECT_TIMEOUT = int(os.getenv("GL_CONNECT_TIMEOUT", "30"))
+MAX_TIMEOUT = int(os.getenv("GL_MAX_TIMEOUT", "60"))
+RETRY_TOTAL = int(os.getenv("GL_RETRIES", "3"))
 
 def _ua():
     return ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
@@ -19,25 +29,37 @@ def _b64(b: bytes) -> str:
     return base64.b64encode(b).decode("ascii")
 
 class GlobaLeaksClient:
-    def __init__(self, base: str, username: str, password: str):
+    def __init__(self, base: str, username: str, password: str, authcode: str = AUTHCODE):
         if not base:
             raise RuntimeError("GLOBALEAKS_BASE_URL is empty")
         self.base = base.rstrip("/")
         self.username = username
         self.password = password
+        self.authcode = authcode or ""
+        
+        # Parse the base URL to get hostname for debugging
+        parsed = urlparse(self.base)
+        self.hostname = parsed.hostname or "unknown"
 
         self.s = requests.Session()
         self.s.trust_env = False
         self.s.headers.update({"User-Agent": _ua()})
 
+        # Increase default timeouts for requests session
+        self.s.timeout = (CONNECT_TIMEOUT, MAX_TIMEOUT)
+
         sid_env = (os.getenv("GLOBALEAKS_SESSION_ID", "") or "").strip()
         if sid_env:
             self.s.headers["X-Session"] = sid_env
+            if DEBUG:
+                print(f"[init] Using existing session: {sid_env[:8]}...")
 
         if DEBUG:
-            print(f"[env] curl at: {CURL_BIN}")
+            print(f"[init] curl at: {CURL_BIN}")
+            print(f"[init] base: {self.base}")
+            print(f"[init] username: {self.username}")
+            print(f"[init] timeouts: connect={CONNECT_TIMEOUT}s, max={MAX_TIMEOUT}s")
 
-    # ---------- exact header set used by the browser ----------
     def _h_common(self) -> list[str]:
         base = self.base
         return [
@@ -45,9 +67,25 @@ class GlobaLeaksClient:
             "-H", f"Origin: {base}",
             "-H", f"Referer: {base}/#/login",
             "-H", f"User-Agent: {_ua()}",
+            "--connect-timeout", str(CONNECT_TIMEOUT),
+            "--max-time", str(MAX_TIMEOUT),
+            "--retry", "2",  # Add retry logic
+            "--retry-delay", "1",
         ]
 
-    # ---------- cURL helpers ----------
+    def _h(self, *, ctype: Optional[str] = None, extra: Optional[Dict[str, str]] = None) -> Dict[str, str]:
+        headers: Dict[str, str] = {
+            "Accept": "application/json, text/plain, */*",
+            "Origin": self.base,
+            "Referer": f"{self.base}/#/login",
+            "X-Requested-With": "XMLHttpRequest",
+        }
+        if ctype:
+            headers["Content-Type"] = ctype
+        if extra:
+            headers.update(extra)
+        return headers
+
     def _curl_json(self, args: list[str], *, http2: bool = False) -> dict:
         """
         Run curl (h1 by default; h2 if requested), capture JSON body + HTTP status.
@@ -61,77 +99,158 @@ class GlobaLeaksClient:
 
         full = base_args + args
         if DEBUG:
-            import shlex
             print("[curl]", " ".join(shlex.quote(a) for a in full))
 
-        p = subprocess.run(full, capture_output=True, text=True)
+        start_time = time.time()
+        try:
+            p = subprocess.run(full, capture_output=True, text=True, timeout=MAX_TIMEOUT + 10)
+        except subprocess.TimeoutExpired:
+            elapsed = time.time() - start_time
+            raise RuntimeError(f"curl command timed out after {elapsed:.1f}s")
+        
+        elapsed = time.time() - start_time
         out = p.stdout or ""
         err = p.stderr or ""
 
         body, sep, status_tail = out.rpartition("HTTPSTATUS:")
         http_status = int(status_tail.strip()) if sep else None
 
+        if DEBUG:
+            print(f"[curl] elapsed: {elapsed:.2f}s, return_code: {p.returncode}, http_status: {http_status}")
+
         if p.returncode != 0 or (http_status and http_status >= 400):
+            error_msg = f"curl failed (elapsed: {elapsed:.1f}s, status={http_status}, code={p.returncode})"
+            
+            if p.returncode == 28:  # curl timeout
+                error_msg += " - CONNECTION TIMEOUT"
+            elif p.returncode == 7:  # couldn't connect
+                error_msg += " - COULDN'T CONNECT TO HOST"
+            elif p.returncode == 6:  # couldn't resolve host
+                error_msg += " - COULDN'T RESOLVE HOST"
+            
             if DEBUG:
-                print(f"[curl-err] code={p.returncode} status={http_status} "
-                    f"body={body[:300]!r} stderr={err.strip()!r}")
-            raise RuntimeError(f"curl failed (status={http_status}, code={p.returncode}): "
-                            f"{(body or err).strip()}")
+                error_msg += f"\nbody: {body[:300]!r}\nstderr: {err.strip()!r}"
+            
+            # Include some diagnostics in the error
+            if "timeout" in err.lower() or p.returncode == 28:
+                error_msg += f"\n\nDIAGNOSTIC HINTS:"
+                error_msg += f"\n- Check if {self.hostname} is reachable"
+                error_msg += f"\n- Try increasing timeouts: GL_CONNECT_TIMEOUT={CONNECT_TIMEOUT*2} GL_MAX_TIMEOUT={MAX_TIMEOUT*2}"
+                error_msg += f"\n- Test with: curl -I --connect-timeout {CONNECT_TIMEOUT} {self.base}"
+            
+            raise RuntimeError(error_msg)
+
+        if DEBUG and elapsed > 5:
+            print(f"[curl-slow] request took {elapsed:.2f}s - consider checking network")
 
         if DEBUG:
             print(f"[curl-ok] status={http_status} body[0:120]={body[:120]!r}")
 
         return json.loads(body or "{}")
 
-    # ---------- token ----------
+    def _test_connectivity(self) -> bool:
+        """Test basic connectivity to the GlobaLeaks server"""
+        if DEBUG:
+            print(f"[connectivity] Testing connection to {self.base}")
+        
+        try:
+            r = self.s.get(f"{self.base}/api/auth/token", 
+                          headers=self._h(ctype="application/json"), 
+                          timeout=(CONNECT_TIMEOUT, MAX_TIMEOUT))  # Short timeout for connectivity test
+            if DEBUG:
+                print(f"[connectivity] HTTP {r.status_code} in {r.elapsed.total_seconds():.2f}s")
+            return r.status_code < 500
+        except requests.exceptions.ConnectTimeout:
+            if DEBUG:
+                print(f"[connectivity] CONNECT TIMEOUT to {self.hostname}")
+            return False
+        except requests.exceptions.ReadTimeout:
+            if DEBUG:
+                print(f"[connectivity] READ TIMEOUT from {self.hostname}")
+            return False
+        except requests.exceptions.ConnectionError as e:
+            if DEBUG:
+                print(f"[connectivity] CONNECTION ERROR: {e}")
+            return False
+        except Exception as e:
+            if DEBUG:
+                print(f"[connectivity] UNEXPECTED ERROR: {e}")
+            return False
+
     def _curl_token(self) -> str:
-        out = self._curl_json(
-            self._h_common()
-            + ["-X", "POST", f"{self.base}/api/auth/token",
-               "-H", "Content-Type: application/json",
-               "--data-raw", "{}"]
-        )
+        try:
+            out = self._curl_json(
+                self._h_common()
+                + ["-X", "POST", f"{self.base}/api/auth/token",
+                   "-H", "Content-Type: application/json",
+                   "--data-raw", "{}"]
+            )
+        except RuntimeError as e:
+            if "timeout" in str(e).lower() or "couldn't connect" in str(e).lower():
+                # Suggest fallback strategies
+                raise RuntimeError(f"Failed to get auth token: {e}\n\n"
+                                 f"TROUBLESHOOTING STEPS:\n"
+                                 f"1. Verify server is accessible: curl -I {self.base}\n"
+                                 f"2. Check if using correct URL (http vs https)\n"
+                                 f"3. Test with onion address if available\n"
+                                 f"4. Increase timeouts with GL_CONNECT_TIMEOUT and GL_MAX_TIMEOUT")
+            raise
+        
         tid = (out or {}).get("id")
-        if DEBUG: print("[auth.token] ->", tid)
+        if DEBUG: 
+            print(f"[auth.token] -> {tid[:8] if tid else 'None'}...")
         if not tid:
-            raise RuntimeError("No id from /api/auth/token")
+            raise RuntimeError(f"No id from /api/auth/token. Response: {out}")
         return tid
 
-    # ---------- /api/auth/type -> salt ----------
-    def _curl_type(self, token_id: str) -> str:
-        x = f"{token_id}:711"  # small numeric suffix like the UI
-        out = self._curl_json(
-            self._h_common()
-            + ["-X", "POST", f"{self.base}/api/auth/type",
-               "-H", "X-Requested-With: XMLHttpRequest",
-               "-H", "Content-Type: text/plain; charset=UTF-8",
-               "-H", f"X-Token: {x}",
-               "--data-raw", json.dumps({"username": self.username}, separators=(",", ":"))]
-        )
-        salt_b64 = (out or {}).get("salt", "")
-        if DEBUG: print("[auth.type] salt len:", len(salt_b64))
-        if not salt_b64:
-            raise RuntimeError("No 'salt' from /api/auth/type")
-        return salt_b64
+    def _curl_type(self, token_id: str) -> tuple[str, str]:
+        suffixes = ["711", "733", "299", "180"]
+        errors = []
+        
+        for suffix in suffixes:
+            try:
+                out = self._curl_json(
+                    self._h_common()
+                    + ["-X", "POST", f"{self.base}/api/auth/type",
+                       "-H", "X-Requested-With: XMLHttpRequest",
+                       "-H", "Content-Type: text/plain; charset=UTF-8",
+                       "-H", f"X-Token: {token_id}:{suffix}",
+                       "--data-raw", json.dumps({"username": self.username}, separators=(",", ":"))]
+                )
+                salt_b64 = (out or {}).get("salt", "")
+                if DEBUG:
+                    print(f"[auth.type] suffix={suffix} -> salt len: {len(salt_b64)}")
+                if salt_b64:
+                    return salt_b64, suffix
+                else:
+                    errors.append(f"suffix {suffix}: no salt in response {out}")
+            except Exception as exc:
+                errors.append(f"suffix {suffix}: {exc}")
+                continue
+        
+        error_summary = "; ".join(errors)
+        raise RuntimeError(f"No 'salt' from /api/auth/type after trying all suffixes. Errors: {error_summary}")
 
     def _argon2id_key32(self, salt_b64: str) -> str:
-        salt = base64.b64decode(salt_b64)
-        k = hash_secret_raw(self.password.encode(), salt,
-                            time_cost=2, memory_cost=65536, parallelism=1,
-                            hash_len=32, type=Argon2Type.ID)
-        key = _b64(k)
-        if DEBUG: print("[derive] argon2id key32:", key[:8], "…")
-        return key
+        try:
+            salt = base64.b64decode(salt_b64)
+        except Exception as e:
+            raise RuntimeError(f"Failed to decode salt base64 '{salt_b64}': {e}")
+        
+        try:
+            k = hash_secret_raw(self.password.encode(), salt,
+                                time_cost=2, memory_cost=65536, parallelism=1,
+                                hash_len=32, type=Argon2Type.ID)
+            key = _b64(k)
+            if DEBUG: 
+                print(f"[derive] argon2id key32: {key[:8]}...")
+            return key
+        except Exception as e:
+            raise RuntimeError(f"Failed to derive Argon2ID key: {e}")
 
-    # ---------- /api/auth/authentication ----------
-    def _curl_authentication(self, token_id: str, key32: str) -> str | None:
+    def _curl_authentication(self, token_id: str, key32: str, suffixes: Sequence[str]) -> Optional[str]:
         """
-        Try the 4 permutations that cover edge cases:
-        1) h1, X-Token header + token in body
-        2) h1, token in body only
-        3) h2, X-Token header + token in body
-        4) h2, X-Token header only
-        Return session id on success; None otherwise.
+        Try authentication with multiple strategies
         """
         attempts = [
             # (label, http2, send_header, token_in_body)
@@ -141,124 +260,311 @@ class GlobaLeaksClient:
             ("h2/hdr-only", True,  True,  False),
         ]
 
-        for label, use_http2, use_hdr, token_in_body in attempts:
-            headers = self._h_common() + [
-                "-H", "X-Requested-With: XMLHttpRequest",
-                "-H", "Content-Type: text/plain; charset=UTF-8",
-            ]
-            if use_hdr:
-                headers += ["-H", f"X-Token: {token_id}:733"]
+        for suffix in suffixes:
+            for label, use_http2, use_hdr, token_in_body in attempts:
+                headers = self._h_common() + [
+                    "-H", "X-Requested-With: XMLHttpRequest",
+                    "-H", "Content-Type: text/plain; charset=UTF-8",
+                ]
+                if use_hdr:
+                    headers += ["-H", f"X-Token: {token_id}:{suffix}"]
 
-            payload = {
-                "tid": 0,
-                "username": self.username,
-                "password": key32.strip(),
-                "authcode": ""
-            }
-            if token_in_body:
-                payload["token"] = token_id
+                payload = {
+                    "tid": 0,
+                    "username": self.username,
+                    "password": key32.strip(),
+                }
+                if self.authcode:
+                    payload["authcode"] = self.authcode
+                if token_in_body:
+                    payload["token"] = token_id
 
-            try:
-                out = self._curl_json(
-                    headers + [
-                        "-X", "POST", f"{self.base}/api/auth/authentication",
-                        "--data-raw", json.dumps(payload, separators=(",", ":"))
-                    ],
-                    http2=use_http2
-                )
-                sid = (out or {}).get("id")
-                if DEBUG:
-                    print(f"[auth.authentication] {label} -> {'OK' if sid else 'FAILED'}")
-                if sid:
-                    return sid
-            except Exception as e:
-                if DEBUG:
-                    print(f"[auth.authentication] {label} exception:", e)
-                # try next permutation
+                try:
+                    if DEBUG:
+                        print(f"[auth.authentication] trying {label} suffix={suffix}...")
+                    
+                    out = self._curl_json(
+                        headers + [
+                            "-X", "POST", f"{self.base}/api/auth/authentication",
+                            "--data-raw", json.dumps(payload, separators=(",", ":"))
+                        ],
+                        http2=use_http2
+                    )
+                    
+                    sid = (out or {}).get("id")
+                    if DEBUG:
+                        status = "SUCCESS" if sid else f"FAILED - response: {out}"
+                        print(f"[auth.authentication] {label} suffix={suffix} -> {status}")
+                    if sid:
+                        return sid
+                except Exception as e:
+                    if DEBUG:
+                        print(f"[auth.authentication] {label} suffix={suffix} exception: {e}")
+                    continue
 
         return None
 
-    def _curl_session_login(self, token_id: str, key32_b64: str) -> Optional[str]:
-        # backup path: POST /api/auth/session with hashing=argon2id
-        out = self._curl_json([
-            "-X", "POST", f"{self.base}/api/auth/session",
-            "-H", "Accept: application/json, text/plain, */*",
-            "-H", "X-Requested-With: XMLHttpRequest",
-            "-H", f"Referer: {self.base}/#/login",
-            "-H", f"Origin: {self.base}",
-            "-H", "Content-Type: application/json",
-            "-H", f"X-Token: {token_id}:733",
-            "--data", json.dumps({
-                "role": "recipient",
-                "username": self.username,
-                "password": key32_b64,
-                "hashing": "argon2id",
-                "token": token_id
-            }, separators=(",", ":")),
-        ])
-        sid = out.get("id")
-        if DEBUG: print("[auth.session] ->", "OK" if sid else "FAILED")
-        return sid
+    def _curl_session_login(self, token_id: str, key32_b64: str, suffixes: Sequence[str]) -> Optional[str]:
+        payload = {
+            "role": "recipient",
+            "username": self.username,
+            "password": key32_b64,
+            "hashing": "argon2id",
+            "token": token_id,
+        }
+        if self.authcode:
+            payload["authcode"] = self.authcode
 
-    # ---------- Python data calls ----------
+        for suffix in suffixes:
+            try:
+                if DEBUG:
+                    print(f"[auth.session] trying suffix={suffix}...")
+                
+                out = self._curl_json([
+                    "-X", "POST", f"{self.base}/api/auth/session",
+                    "-H", "Accept: application/json, text/plain, */*",
+                    "-H", "X-Requested-With: XMLHttpRequest",
+                    "-H", f"Referer: {self.base}/#/login",
+                    "-H", f"Origin: {self.base}",
+                    "-H", "Content-Type: application/json",
+                    "-H", f"X-Token: {token_id}:{suffix}",
+                    "--data", json.dumps(payload, separators=(",", ":")),
+                ])
+                
+                sid = out.get("id")
+                if DEBUG:
+                    status = "SUCCESS" if sid else f"FAILED - response: {out}"
+                    print(f"[auth.session] suffix={suffix} -> {status}")
+                if sid:
+                    return sid
+            except Exception as exc:
+                if DEBUG:
+                    print(f"[auth.session] suffix={suffix} exception: {exc}")
+                continue
+        return None
+
     def _validate_session(self) -> bool:
-        r = self.s.get(f"{self.base}/api/recipient/rtips", headers=self._h(ctype="application/json"), timeout=15)
-        return r.status_code == 200
+        try:
+            r = self.s.get(f"{self.base}/api/recipient/rtips", 
+                          headers=self._h(ctype="application/json"), 
+                          timeout=(10, 20))
+            if DEBUG:
+                print(f"[validate] session check HTTP {r.status_code}")
+            return r.status_code == 200
+        except Exception as e:
+            if DEBUG:
+                print(f"[validate] session check failed: {e}")
+            return False
 
-    # ---------- login orchestrator (unchanged logic, but uses the cURL helpers) ----------
     def login(self) -> str:
+        """Enhanced login with better error reporting"""
+        if DEBUG:
+            print("[login] Starting login process...")
+        
+        # Test basic connectivity first
+        if not self._test_connectivity():
+            raise RuntimeError(f"Cannot connect to GlobaLeaks server at {self.base}. "
+                             f"Please check the URL and network connectivity.")
+        
         # reuse any valid X-Session
         if self.s.headers.get("X-Session"):
-            r = self.s.get(f"{self.base}/api/recipient/rtips")
-            if r.status_code == 200:
+            if DEBUG:
+                print("[login] Checking existing session...")
+            if self._validate_session():
+                if DEBUG:
+                    print("[login] Existing session is valid")
                 return self.s.headers["X-Session"]
-            self.s.headers.pop("X-Session", None)
+            else:
+                if DEBUG:
+                    print("[login] Existing session invalid, removing")
+                self.s.headers.pop("X-Session", None)
 
-        t1 = self._curl_token()
-        salt_b64 = self._curl_type(t1)
+        try:
+            t_type = self._curl_token()
+            salt_b64, salt_suffix = self._curl_type(t_type)
+            key32 = self._argon2id_key32(salt_b64)
 
-        # Argon2id (the one you proved works)
-        from argon2.low_level import hash_secret_raw, Type as Argon2Type
-        import base64
-        k = hash_secret_raw(
-            self.password.encode(), base64.b64decode(salt_b64),
-            time_cost=2, memory_cost=65536, parallelism=1,
-            hash_len=32, type=Argon2Type.ID
-        )
-        key32 = base64.b64encode(k).decode()
+            auth_suffixes = ["299", "733", "711", "180"]
+            if salt_suffix and salt_suffix not in auth_suffixes:
+                auth_suffixes.insert(0, salt_suffix)
+            elif salt_suffix:
+                try:
+                    auth_suffixes.insert(0, auth_suffixes.pop(auth_suffixes.index(salt_suffix)))
+                except ValueError:
+                    pass
 
-        # Try with a fresh token first (matches your manual flow)
-        t2 = self._curl_token()
-        sid = self._curl_authentication(t2, key32)
-        if not sid:
-            # Some nodes prefer the same token id as /type (t1)
-            sid = self._curl_authentication(t1, key32)
-        if not sid:
-            # As an absolute fallback, force http/1.1 again with a new token:
-            t3 = self._curl_token()
-            sid = self._curl_authentication(t3, key32)
+            sid: Optional[str] = None
+            tokens_to_try = [t_type, self._curl_token()]  # Try the type token first
+            seen_tokens = set()
+            
+            while tokens_to_try and not sid:
+                token_id = tokens_to_try.pop(0)
+                if token_id in seen_tokens:
+                    continue
+                seen_tokens.add(token_id)
+                
+                if DEBUG:
+                    print(f"[login] Trying authentication with token {token_id[:8]}...")
+                
+                sid = self._curl_authentication(token_id, key32, auth_suffixes)
+                if sid:
+                    break
+                    
+                if DEBUG:
+                    print(f"[login] Trying session login with token {token_id[:8]}...")
+                    
+                sid = self._curl_session_login(token_id, key32, auth_suffixes)
+                if sid:
+                    break
+                
+                # Generate one more token if we've exhausted the current ones
+                if len(seen_tokens) <= 2 and len(tokens_to_try) == 0:
+                    try:
+                        new_token = self._curl_token()
+                        if new_token not in seen_tokens:
+                            tokens_to_try.append(new_token)
+                    except Exception as e:
+                        if DEBUG:
+                            print(f"[login] Failed to get additional token: {e}")
+                        break
 
-        if not sid:
-            raise RuntimeError("Login refused by /api/auth/authentication (via cURL/http1.1).")
+            if not sid:
+                error_msg = (f"Login failed to GlobaLeaks node at {self.base}\n\n"
+                           f"ATTEMPTED STRATEGIES:\n"
+                           f"- Multiple token variations\n" 
+                           f"- HTTP/1.1 and HTTP/2 protocols\n"
+                           f"- Different authentication endpoints\n"
+                           f"- Various suffix combinations: {auth_suffixes}\n\n"
+                           f"POSSIBLE CAUSES:\n"
+                           f"- Incorrect username/password\n"
+                           f"- 2FA required but not provided\n"
+                           f"- Server-side authentication changes\n"
+                           f"- Network/proxy interference\n\n"
+                           f"TROUBLESHOOTING:\n"
+                           f"- Verify credentials in web browser\n"
+                           f"- Check if 2FA is enabled\n"
+                           f"- Try with onion address if available\n"
+                           f"- Enable DEBUG=1 for detailed logs")
+                raise RuntimeError(error_msg)
 
-        # keep for subsequent GETs
-        self.s.headers["X-Session"] = sid
-        return sid
+            # keep for subsequent GETs
+            self.s.headers["X-Session"] = sid
+            if DEBUG:
+                print(f"[login] SUCCESS - session: {sid[:8]}...")
+            return sid
+            
+        except RuntimeError:
+            raise  # Re-raise our custom errors as-is
+        except Exception as e:
+            raise RuntimeError(f"Unexpected error during login: {e}") from e
 
     def get(self, path: str) -> requests.Response:
         if not self.s.headers.get("X-Session"):
             self.login()
-        r = self.s.get(f"{self.base}{path}", headers=self._h(ctype="application/json"), timeout=15)
-        if r.status_code == 412:
+        
+        try:
+            r = self.s.get(f"{self.base}{path}", 
+                          headers=self._h(ctype="application/json"), 
+                          timeout=(10, 20))
+        except (requests.exceptions.ConnectTimeout, requests.exceptions.ReadTimeout) as e:
+            raise RuntimeError(f"Timeout accessing {path}: {e}")
+        except requests.exceptions.ConnectionError as e:
+            raise RuntimeError(f"Connection error accessing {path}: {e}")
+        
+        if r.status_code == 412:  # Session expired
+            if DEBUG:
+                print(f"[get] Session expired (412), re-authenticating...")
             self.s.headers.pop("X-Session", None)
             self.login()
-            r = self.s.get(f"{self.base}{path}", headers=self._h(ctype="application/json"), timeout=15)
+            try:
+                r = self.s.get(f"{self.base}{path}", 
+                              headers=self._h(ctype="application/json"), 
+                              timeout=(CONNECT_TIMEOUT, MAX_TIMEOUT))
+            except (requests.exceptions.ConnectTimeout, requests.exceptions.ReadTimeout) as e:
+                raise RuntimeError(f"Timeout accessing {path} after re-auth: {e}")
+        
         r.raise_for_status()
         return r
 
     def list_tips(self) -> List[Dict[str, Any]]:
-        return self.get("/api/recipient/rtips").json() or []
+        response = self.get("/api/recipient/rtips")
+        tips = response.json() or []
+        if DEBUG:
+            print(f"[list_tips] Retrieved {len(tips)} tips")
+        return tips
+    
+class TorGlobaLeaksClient(GlobaLeaksClient):
+    def __init__(self, base, username, password, authcode=""):
+        use_onion = os.getenv("USE_ONION", "0") == "1"
+        tor_required = os.getenv("TOR_REQUIRED", "0") == "1"  # set to 1 to forbid fallback
+        onion_base = os.getenv("GLOBALEAKS_ONION", "").rstrip("/")
+        clearnet_base = os.getenv("GLOBALEAKS_BASE_URL", "").rstrip("/")
+        tor_socks = os.getenv("TOR_SOCKS", "127.0.0.1:9050")
+        
+        if use_onion and onion_base:
+            print(f"[tor] Using onion address: {onion_base}")
+            base = onion_base.rstrip("/")
+        
+        super().__init__(base, username, password, authcode)
+        
+        # Configure Tor proxy for requests session
+        if use_onion:
+            self.s.proxies = {
+                'http': f'socks5h://{tor_socks}',
+                'https': f'socks5h://{tor_socks}'
+            }
+            print(f"[tor] Using Tor proxy: {tor_socks}")
 
-# convenience
+        self._tor_required = tor_required
+        self._clearnet_base = clearnet_base
+        self._onion_base = onion_base
+        self._use_onion = use_onion
+
+    def get(self, path: str):
+        try:
+            return super().get(path)
+        except RuntimeError as e:
+            # Only fallback if allowed and onion was in use
+            if (self._use_onion and not self._tor_required and self._clearnet_base):
+                print("[tor] Onion/tor failed, falling back to clearnet for this request")
+                self.base = self._clearnet_base
+                self.s.proxies = {}  # disable tor
+                return super().get(path)
+            raise
+    
+    def _h_common(self) -> list[str]:
+        """Override to add Tor proxy support to curl commands"""
+        base_args = super()._h_common()
+        
+        use_onion = os.getenv("USE_ONION", "0") == "1"
+        tor_socks = os.getenv("TOR_SOCKS", "127.0.0.1:9050")
+        
+        if use_onion:
+            base_args.extend(["--proxy", f"socks5h://{tor_socks}"])
+        
+        return base_args
+
+# convenience function
+def list_tips_tor():
+    base = os.getenv("GLOBALEAKS_BASE_URL", "").rstrip("/")
+    user = os.getenv("GLOBALEAKS_USERNAME", "")
+    password = os.getenv("GLOBALEAKS_PASSWORD", "")
+    authcode = os.getenv("GLOBALEAKS_AUTHCODE", "")
+    
+    client = TorGlobaLeaksClient(base, user, password, authcode)
+    return client.list_tips()
+
 def list_tips() -> List[Dict[str, Any]]:
-    return GlobaLeaksClient(BASE, USER, PASS).list_tips()
+    return GlobaLeaksClient(BASE, USER, PASS, AUTHCODE).list_tips()
+
+def test_connection():
+    try:
+        tips = list_tips()
+        print(f"✅ Successfully retrieved {len(tips)} tips")
+        return True
+    except Exception as e:
+        print(f"❌ Connection failed: {e}")
+        return False
+
+if __name__ == "__main__":
+    test_connection()
