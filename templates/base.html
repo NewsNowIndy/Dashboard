@@ -77,6 +77,11 @@
               href="{{ url_for('calendar_ui.week_view') }}"
             >Calendar</a>
           </li>  
+          <li class="nav-item">
+            <a class="nav-link {% if request.path.startswith('/mail') %}active{% endif %}"
+               href="{{ url_for('mail.compose') }}">
+              Email</a>
+          </li>
         </ul>
         </div class="d-flex align-items-center gap-2">
           <a href="{{ url_for('calendar.calendar_all') }}">Calendar (.ics)</a>

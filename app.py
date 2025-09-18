@@ -43,6 +43,7 @@ from models import ensure_av_fts
 from policies import policies
 from routes_tips import bp as bp_tips
 from routes_calendar_ui import bp as bp_calendar_ui
+from routes_mail import bp as bp_mail
 
 @event.listens_for(Engine, "connect")
 def _sqlite_pragmas(dbapi_conn, _):
@@ -96,6 +97,7 @@ app.register_blueprint(bp_notebook)
 app.register_blueprint(policies)
 app.register_blueprint(bp_tips)
 app.register_blueprint(bp_calendar_ui)
+app.register_blueprint(bp_mail)
 
 ensure_fts_tables(engine)
 

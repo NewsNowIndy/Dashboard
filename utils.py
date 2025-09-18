@@ -9,7 +9,6 @@ import smtplib, ssl
 from email.message import EmailMessage
 from zoneinfo import ZoneInfo
 import os, re, time
-
 fernet = Fernet(Config.FERNET_KEY)
 
 LOCAL_TZ = ZoneInfo("America/Indiana/Indianapolis")

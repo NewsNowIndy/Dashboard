@@ -68,8 +68,14 @@
         <div><b>Status:</b> {{ r.status.value }}</div>
         <div><b>Requested:</b> {{ r.request_date|mdy or '—' }}</div>
         <div><b>Completed:</b> {{ r.completed_date|mdy or '—' }}</div>
+      
+        <a class="btn btn-sm btn-outline-primary mt-2"
+           href="{{ url_for('mail.compose',
+                            subject='FOIA ' ~ (r.reference_number or '') ~ ' — Follow-up',
+                            body='Request link: ' ~ url_for('request_detail', req_id=r.id, _external=True)) }}">
+          Send E-Mail
+        </a>
       </div>
-    </div>
 
     <!-- Row: Dates card + Update Status card -->
     <div class="row g-3">
