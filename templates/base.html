@@ -71,6 +71,12 @@
           </li>
           <li class="nav-item">
             <a class="nav-link" href="{{ url_for('tips.index') }}">Tips</a>
+          </li>
+          <li class="nav-item">
+            <a class="nav-link {% if request.endpoint and request.endpoint.startswith('calendar_ui.') %}active{% endif %}"
+              href="{{ url_for('calendar_ui.week_view') }}"
+            >Calendar</a>
+          </li>  
         </ul>
         </div class="d-flex align-items-center gap-2">
           <a href="{{ url_for('calendar.calendar_all') }}">Calendar (.ics)</a>
