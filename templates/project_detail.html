@@ -33,6 +33,12 @@
       {% endfor %}
     </select>
   </form>
+  <a class="btn btn-sm btn-outline-primary ms-2"
+   href="{{ url_for('mail.compose',
+                    subject='Project: ' ~ project.name,
+                    body='Project link: ' ~ url_for('project_detail', slug=project.slug, _external=True)) }}">
+  Send E-Mail
+</a>
 </div>
 <a class="btn btn-outline-light" href="{{ url_for('project_export_pdf', pid=project.id) }}">
     Export Project PDF
