@@ -1,8 +1,9 @@
 # calendar_feed.py
 from datetime import datetime, time, timedelta
-from flask import Response, Blueprint
+from flask import Response, Blueprint, current_app
 from zoneinfo import ZoneInfo
 from models import SessionLocal, Project, FoiaRequest
+from icalendar import Calendar
 
 LOCAL_TZID = "America/Indiana/Indianapolis"
 LOCAL_TZ = ZoneInfo(LOCAL_TZID)
