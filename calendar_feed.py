@@ -1,9 +1,9 @@
 # calendar_feed.py
 from datetime import datetime, time, timedelta
-from flask import Response, Blueprint, current_app
+from flask import Response, Blueprint
 from zoneinfo import ZoneInfo
-from models import SessionLocal, Project, FoiaRequest
-from icalendar import Calendar
+from models import SessionLocal, Project, FoiaRequest, RequestStatus
+from models import CalendarEvent
 
 LOCAL_TZID = "America/Indiana/Indianapolis"
 LOCAL_TZ = ZoneInfo(LOCAL_TZID)
@@ -106,7 +106,16 @@ def _vevent(uid: str, dtstart: datetime, summary: str, desc: str = "", duration:
     parts.append("END:VEVENT\r\n")
     return "".join(parts)
 
-def build_calendar(projects, foias) -> str:
+def _duration_from(e) -> timedelta:
+    if getattr(e, "end_dt", None):
+        try:
+            return max(e.end_dt - e.start_dt, timedelta(minutes=1))
+        except Exception:
+            pass
+    return timedelta(minutes=30)
+
+def build_calendar(projects, foias, custom_events=None) -> str:
+    custom_events = custom_events or []
     body = (
         "BEGIN:VCALENDAR\r\n"
         "VERSION:2.0\r\n"
@@ -132,12 +141,19 @@ def build_calendar(projects, foias) -> str:
                 summary=f"[Project] {name} – due in {days} day{'s' if days!=1 else ''}",
                 desc=f"Project due {_ensure_local(deadline):%Y-%m-%d %H:%M %Z}",
             )
+            pass
 
     # FOIA: offsets after FoiaRequest.request_date (date)
     for r in foias or []:
+        try:
+            if r.status == RequestStatus.COMPLETED:
+                continue
+        except Exception:
+            # if status is missing/None, treat as pending
+            pass
         ref = getattr(r, "reference_number", "Unknown")
         ag = getattr(r, "agency", "Unknown")
-        requested = _coerce_local_dt(getattr(r, "request_date", None))  # <-- use .request_date
+        requested = _coerce_local_dt(getattr(r, "request_date", None))
         if not requested:
             continue
         for days in (7, 14, 21, 30):
@@ -149,6 +165,32 @@ def build_calendar(projects, foias) -> str:
                 desc="Follow up on pending request.",
             )
 
+    # --- NEW: custom CalendarEvent rows ---
+    for e in custom_events or []:
+        start = _coerce_local_dt(getattr(e, "start_dt", None))
+        if not start:
+            continue
+        dur = _duration_from(e)
+        body += _vevent(
+            uid=f"ce-{e.id}@foia",
+            dtstart=start,
+            summary=e.title or "Event",
+            desc=(e.description or ""),
+            duration=dur,
+        )
+    # Custom one-off events (optional, only if you have such a model)
+    for e in custom_events:
+        title = getattr(e, "title", "Custom Event") or "Custom Event"
+        start = _coerce_local_dt(getattr(e, "start_dt", None)) \
+                or _coerce_local_dt(getattr(e, "start_date", None), default_t=time(9,0))
+        if not start:
+            continue
+        dur = getattr(e, "duration_minutes", None)
+        duration = timedelta(minutes=int(dur)) if dur else timedelta(minutes=60)
+        desc = getattr(e, "description", "") or ""
+        uid = f"cust-{getattr(e,'id','x')}@foia"
+        body += _vevent(uid=uid, dtstart=start, summary=title, desc=desc, duration=duration)
+
     body += "END:VCALENDAR\r\n"
     return body
 
@@ -158,7 +200,12 @@ def calendar_feed():
     try:
         projects = db.query(Project).all()
         foias = db.query(FoiaRequest).all()
-        ics = build_calendar(projects, foias)
+        try:
+            from models import CalendarEvent
+            custom_events = db.query(CalendarEvent).all()
+        except Exception:
+            custom_events = []
+        ics = build_calendar(projects, foias, custom_events)
         print(f"[calendar.ics] bytes={len(ics)} events={ics.count('BEGIN:VEVENT')}")
         return Response(
             ics,

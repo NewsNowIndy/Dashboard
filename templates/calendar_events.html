@@ -1,0 +1,82 @@
+{% extends 'base.html' %}
+{% block content %}
+<h3>Calendar Events</h3>
+
+<div class="card mb-3">
+  <div class="card-body">
+    <form method="post" action="{{ url_for('cal_events.events_add') }}" class="row g-2">
+      <div class="col-12 col-md-4">
+        <label class="form-label">Title</label>
+        <input name="title" class="form-control" required>
+      </div>
+      <div class="col-6 col-md-2">
+        <label class="form-label">Date</label>
+        <input type="date" name="start_date" class="form-control" required>
+      </div>
+      <div class="col-6 col-md-2">
+        <label class="form-label">Start</label>
+        <input type="time" name="start_time" class="form-control" value="09:00">
+      </div>
+      <div class="col-6 col-md-2">
+        <label class="form-label">End (optional)</label>
+        <input type="time" name="end_time" class="form-control">
+      </div>
+      <div class="col-12">
+        <label class="form-label">Description (optional)</label>
+        <textarea name="description" class="form-control" rows="2"></textarea>
+      </div>
+      <div class="col-6 col-md-3">
+        <label class="form-label">Link to Project (optional)</label>
+        <select name="project_id" class="form-select">
+          <option value="">—</option>
+          {% for p in projects %}
+            <option value="{{ p.id }}">{{ p.name }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="col-6 col-md-3">
+        <label class="form-label">Link to FOIA (optional)</label>
+        <select name="foia_request_id" class="form-select">
+          <option value="">—</option>
+          {% for r in foias %}
+            <option value="{{ r.id }}">{{ r.reference_number }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="col-12 col-md-2 align-self-end">
+        <button class="btn btn-primary w-100">Add Event</button>
+      </div>
+      <div class="col-12 col-md-4 align-self-end text-md-end">
+        <a class="btn btn-outline-info" href="{{ url_for('calendar.calendar_all') }}">Download .ics</a>
+      </div>
+    </form>
+  </div>
+</div>
+
+<div class="table-responsive">
+  <table class="table table-sm table-dark align-middle">
+    <thead><tr>
+      <th>When</th><th>Title</th><th>Description</th><th>Project</th><th>FOIA</th><th class="text-end">Actions</th>
+    </tr></thead>
+    <tbody>
+      {% for e in events %}
+        <tr>
+          <td>{{ e.start_dt|localfmt }}{% if e.end_dt %} – {{ e.end_dt|localfmt('%m-%d-%Y %H:%M') }}{% endif %}</td>
+          <td>{{ e.title }}</td>
+          <td class="text-break">{{ e.description or '—' }}</td>
+          <td>{% if e.project %}<a href="{{ url_for('project_detail', slug=e.project.slug) }}">{{ e.project.name }}</a>{% else %}—{% endif %}</td>
+          <td>{% if e.request %}<a href="{{ url_for('request_detail', req_id=e.request.id) }}">{{ e.request.reference_number }}</a>{% else %}—{% endif %}</td>
+          <td class="text-end">
+            <form method="post" action="{{ url_for('cal_events.events_delete', event_id=e.id) }}"
+                  onsubmit="return confirm('Delete this event?');">
+              <button class="btn btn-sm btn-outline-danger">Delete</button>
+            </form>
+          </td>
+        </tr>
+      {% else %}
+        <tr><td colspan="6" class="text-muted">No events.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}
