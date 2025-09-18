@@ -1,0 +1,52 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="container mt-4">
+  <div class="d-flex justify-content-between align-items-center mb-3">
+    <h2>Week of {{ start|mdy }} – {{ end|mdy }}</h2>
+    <div class="d-flex gap-2">
+      <a class="btn btn-sm btn-outline-light" href="{{ prev_url }}">&larr; Previous</a>
+      <a class="btn btn-sm btn-outline-light" href="{{ next_url }}">Next &rarr;</a>
+    </div>
+  </div>
+
+  <div class="row row-cols-1 row-cols-md-2 row-cols-lg-3 g-3">
+    {% for day, items in days %}
+    <div class="col">
+      <div class="card h-100">
+        <div class="card-header">
+          <strong>{{ day.strftime("%A") }}</strong>
+          <span class="text-muted ms-2">{{ day|mdy }}</span>
+        </div>
+        <div class="card-body p-2">
+          {% if items %}
+            <ul class="list-unstyled mb-0">
+              {% for ev in items %}
+              <li class="p-2 hover-bg rounded mb-2">
+                <div class="small text-muted">
+                  {{ ev.start.strftime("%I:%M %p").lstrip("0") }}
+                  –
+                  {{ ev.end.strftime("%I:%M %p").lstrip("0") }}
+                </div>
+                <div class="fw-semibold">{{ ev.summary }}</div>
+                {% if ev.location %}
+                  <div class="small text-muted">{{ ev.location }}</div>
+                {% endif %}
+                {% if ev.description %}
+                  <details class="mt-1">
+                    <summary class="small">Notes</summary>
+                    <div class="small" style="white-space: pre-wrap;">{{ ev.description }}</div>
+                  </details>
+                {% endif %}
+              </li>
+              {% endfor %}
+            </ul>
+          {% else %}
+            <div class="text-muted p-2">No events.</div>
+          {% endif %}
+        </div>
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+</div>
+{% endblock %}

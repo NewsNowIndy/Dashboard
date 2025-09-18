@@ -42,6 +42,7 @@ import listeners_signal
 from models import ensure_av_fts
 from policies import policies
 from routes_tips import bp as bp_tips
+from routes_calendar_ui import bp as bp_calendar_ui
 
 @event.listens_for(Engine, "connect")
 def _sqlite_pragmas(dbapi_conn, _):
@@ -94,6 +95,7 @@ app.register_blueprint(bp_auth, url_prefix="")
 app.register_blueprint(bp_notebook)
 app.register_blueprint(policies)
 app.register_blueprint(bp_tips)
+app.register_blueprint(bp_calendar_ui)
 
 ensure_fts_tables(engine)
 
