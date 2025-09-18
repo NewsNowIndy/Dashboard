@@ -33,6 +33,9 @@
       {% endfor %}
     </select>
   </form>
+  <button class="btn btn-sm btn-primary ms-2" data-bs-toggle="modal" data-bs-target="#addCalEventModal">
+    Add Event
+  </button>
   <a class="btn btn-sm btn-outline-primary ms-2"
    href="{{ url_for('mail.compose',
                     subject='Project: ' ~ project.name,
@@ -368,6 +371,8 @@
   No datasets linked yet. <a href="{{ url_for('workbench_upload') }}">Upload one</a> and pick “MCPO Plea Deals” as the project.
 </div>
 {% endif %}
+
+{% include 'partials/add_event_modal.html' ignore missing %}
 
 <style>
   .uploaded-cell { color: #fff !important; }

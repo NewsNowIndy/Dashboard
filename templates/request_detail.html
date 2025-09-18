@@ -68,6 +68,13 @@
         <div><b>Status:</b> {{ r.status.value }}</div>
         <div><b>Requested:</b> {{ r.request_date|mdy or '—' }}</div>
         <div><b>Completed:</b> {{ r.completed_date|mdy or '—' }}</div>
+
+        <!-- Add Event button below the summary -->
+        <div class="mt-2">
+          <button class="btn btn-sm btn-primary" data-bs-toggle="modal" data-bs-target="#addCalEventModal">
+            Add Event
+          </button>
+        </div>
       
         <a class="btn btn-sm btn-outline-primary mt-2"
            href="{{ url_for('mail.compose',
@@ -344,4 +351,5 @@
 
   </div>
 </div>
+{% include 'partials/add_event_modal.html' ignore missing %}
 {% endblock %}

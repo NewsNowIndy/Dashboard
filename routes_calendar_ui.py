@@ -8,6 +8,7 @@ import os, requests
 from icalendar import Calendar
 import recurring_ical_events
 from urllib.parse import urljoin
+from models import SessionLocal, Project, FoiaRequest
 
 bp = Blueprint("calendar_ui", __name__, url_prefix="/calendar")
 
@@ -105,10 +106,46 @@ def week_view():
     prev_start = (start_d - timedelta(days=7)).strftime("%Y-%m-%d")
     next_start = (start_d + timedelta(days=7)).strftime("%Y-%m-%d")
 
+    # 🔽 NEW: fetch options for the global “Add Event” modal dropdowns
+    db = SessionLocal()
+    try:
+        all_projects = db.query(Project).order_by(Project.name.asc()).all()
+        all_foias = (
+            db.query(FoiaRequest)
+              .order_by(FoiaRequest.request_date.desc())
+              .limit(1000)
+              .all()
+        )
+    finally:
+        db.close()
+
     return render_template(
         "calendar_week.html",
-        start=start_d, end=end_d - timedelta(days=1),
+        start=start_d,
+        end=end_d - timedelta(days=1),
         days=list(by_day.items()),
         prev_url=url_for("calendar_ui.week_view", start=prev_start),
-        next_url=url_for("calendar_ui.week_view", start=next_start)
+        next_url=url_for("calendar_ui.week_view", start=next_start),
+        # 🔽 pass lists so the modal can render dropdowns
+        all_projects=all_projects,
+        all_foias=all_foias,
     )
+
+@bp.post("/events/create", endpoint="events_create")
+@login_required
+def events_create():
+    """
+    Minimal stub so the Add Event modal can submit without 404/BuildError.
+    Later, insert into your CalendarEvent table and redirect back.
+    """
+    title = (request.form.get("title") or "").strip()
+    # Optional linkages (blank by default)
+    project_id = request.form.get("project_id") or None
+    foia_id = request.form.get("foia_id") or None
+    start = request.form.get("start")
+    end   = request.form.get("end")
+    # TODO: parse datetimes, insert DB row, etc.
+
+    flash("Event creation endpoint hit. Wire it to save an event next.", "info")
+    # send user back to the calendar week view (or referrer)
+    return redirect(request.referrer or url_for("calendar_ui.week_view"))

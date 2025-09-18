@@ -303,5 +303,20 @@ class Tip(Base):
 
     project = relationship("Project", lazy="joined")
 
+class CalendarEvent(Base):
+    __tablename__ = "calendar_events"
+    id = Column(Integer, primary_key=True)
+    title = Column(String(255), nullable=False)
+    description = Column(Text, nullable=True)
+    start_dt = Column(DateTime, nullable=False)          # interpret as LOCAL time
+    end_dt   = Column(DateTime, nullable=True)           # optional; else default 30min
+    project_id = Column(Integer, ForeignKey("projects.id"), nullable=True, index=True)
+    foia_request_id = Column(Integer, ForeignKey("foia_requests.id"), nullable=True, index=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    project = relationship("Project", lazy="joined", viewonly=True)
+    request = relationship("FoiaRequest", lazy="joined", viewonly=True)
+
 def init_db():
     Base.metadata.create_all(engine)

@@ -16,7 +16,7 @@ from models import (
     init_db, SessionLocal, engine,
     FoiaRequest, FoiaAttachment, RequestStatus, CourtCase, FoiaEvent, SurroundingCase,
     ProjectDocument, Project, ProjectNote, ProjectStatus,
-    WorkbenchDataset, WorkbenchRecordLink, WorkbenchPdfLink, MediaItem, CaseNotebookEntry, FoiaFollowUp, Tip
+    WorkbenchDataset, WorkbenchRecordLink, WorkbenchPdfLink, MediaItem, CaseNotebookEntry, FoiaFollowUp, Tip, CalendarEvent
 )
 from utils import decrypt_file_to_bytes, normalize_request_status, days_until, age_in_days, badge_for_days_left, badge_for_requested_age, send_email
 from sheets_ingest import import_cases_from_csv, import_cases_from_gsheet, import_surrounding_cases_from_csv, import_surrounding_cases_from_gsheet
@@ -576,12 +576,16 @@ def request_detail(req_id):
               .order_by(Project.name.asc())
               .all()
         )
+        all_projects = db.query(Project).order_by(Project.name.asc()).all()
+        all_foias = db.query(FoiaRequest).order_by(FoiaRequest.request_date.desc()).limit(1000).all()
 
         return render_template(
             "request_detail.html",
             r=r,
             pdf_attachments=pdf_attachments,
             eligible_projects=eligible_projects,
+            all_projects=all_projects,
+            all_foias=all_foias,
         )
     finally:
         db.close()
@@ -636,6 +640,9 @@ def request_status(req_id):
 
         cd = request.form.get("completed_date")
         r.completed_date = _parse_date_any(cd)
+
+        if new_status == RequestStatus.COMPLETED:
+            db.query(CalendarEvent).filter(CalendarEvent.foia_request_id == r.id).delete()
 
         db.commit()
 
@@ -1586,10 +1593,15 @@ def project_detail(slug):
         from tip_helpers import derive_titles_for_missing
         derived_titles = derive_titles_for_missing(tips)
 
+        # NEW: for modal
+        all_projects = db.query(Project).order_by(Project.name.asc()).all()
+        all_foias = db.query(FoiaRequest).order_by(FoiaRequest.request_date.desc()).limit(1000).all()
+
         return render_template(
             "project_detail.html",
             project=p, notes=notes, docs=docs, datasets=datasets,
-            media=media, notebook=notebook, tips=tips, derived_titles=derived_titles  # <-- pass through
+            media=media, notebook=notebook, tips=tips, derived_titles=derived_titles,
+            all_projects=all_projects, all_foias=all_foias,  # <-- pass through
         )
     finally:
         db.close()
