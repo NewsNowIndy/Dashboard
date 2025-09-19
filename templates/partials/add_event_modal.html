@@ -1,68 +1,65 @@
-<!-- Add Event Modal (defaults blank) -->
-{# templates/partials/add_event_modal.html #}
 {% set all_projects = all_projects|default([]) %}
 {% set all_foias = all_foias|default([]) %}
 
 <div class="modal fade" id="addCalEventModal" tabindex="-1" aria-hidden="true">
-    <div class="modal-dialog modal-lg">
-      <form method="post" action="{{ url_for('calendar_ui.events_create') }}" class="modal-content">
-        <div class="modal-header">
-          <h5 class="modal-title">Add Calendar Event</h5>
-          <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
+  <div class="modal-dialog">
+    <form method="post" action="{{ url_for('calendar_ui.events_create') }}" class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title">Add Event</h5>
+        <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
+      </div>
+      <div class="modal-body">
+        <div class="mb-2">
+          <label class="form-label">Title</label>
+          <input class="form-control" name="title" required>
         </div>
-  
-        <div class="modal-body">
-          <div class="row g-3">
-            <div class="col-12 col-md-6">
-              <label class="form-label">Title</label>
-              <input name="title" class="form-control" required>
-            </div>
-            <div class="col-6 col-md-3">
-              <label class="form-label">Date</label>
-              <input type="date" name="start_date" class="form-control" required>
-            </div>
-            <div class="col-6 col-md-3">
-              <label class="form-label">Start (HH:MM)</label>
-              <input type="time" name="start_time" class="form-control" value="09:00">
-            </div>
-            <div class="col-6 col-md-3">
-              <label class="form-label">End (optional)</label>
-              <input type="time" name="end_time" class="form-control">
-            </div>
-            <div class="col-12">
-              <label class="form-label">Description (optional)</label>
-              <textarea name="description" class="form-control" rows="3"></textarea>
-            </div>
-  
-            <!-- Both defaults blank -->
-            <div class="col-12 col-md-6">
-              <label class="form-label">Link to Project (optional)</label>
-              <select name="project_id" class="form-select">
-                <option value="">—</option>
-                {% for p in all_projects or [] %}
-                  <option value="{{ p.id }}">{{ p.name }}</option>
-                {% endfor %}
-              </select>
-            </div>
-            <div class="col-12 col-md-6">
-              <label class="form-label">Link to FOIA Request (optional)</label>
-              <select name="foia_request_id" class="form-select">
-                <option value="">—</option>
-                {% for fr in all_foias or [] %}
-                  <option value="{{ fr.id }}">{{ fr.reference_number }}</option>
-                {% endfor %}
-              </select>
-            </div>
-  
+
+        <div class="row g-2">
+          <div class="col-md-6">
+            <label class="form-label">Start</label>
+            <input type="datetime-local" class="form-control" name="start" required>
+          </div>
+          <div class="col-md-6">
+            <label class="form-label">End</label>
+            <input type="datetime-local" class="form-control" name="end">
           </div>
         </div>
-  
-        <div class="modal-footer">
-          <a class="btn btn-outline-info me-auto" href="{{ url_for('calendar.calendar_all') }}">Download .ics</a>
-          <button class="btn btn-secondary" type="button" data-bs-dismiss="modal">Cancel</button>
-          <button class="btn btn-primary">Add Event</button>
+
+        <div class="mb-2">
+          <label class="form-label">Location</label>
+          <input class="form-control" name="location">
         </div>
-      </form>
-    </div>
+
+        <div class="mb-2">
+          <label class="form-label">Notes</label>
+          <textarea class="form-control" name="notes" rows="3"></textarea>
+        </div>
+
+        <div class="mb-2">
+          <label class="form-label">Link to Project (optional)</label>
+          <select class="form-select" name="project_id">
+            <option value=""></option>
+            {% for p in all_projects %}
+              <option value="{{ p.id }}">{{ p.name }}</option>
+            {% endfor %}
+          </select>
+        </div>
+
+        <div class="mb-2">
+          <label class="form-label">Link to FOIA Request (optional)</label>
+          <select class="form-select" name="foia_request_id">
+            <option value=""></option>
+            {% for r in all_foias %}
+              <option value="{{ r.id }}">
+                {{ r.reference_number or ('Request #' ~ r.id) }}
+              </option>
+            {% endfor %}
+          </select>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-primary">Create</button>
+      </div>
+    </form>
   </div>
-  
+</div>

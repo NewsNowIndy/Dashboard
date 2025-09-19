@@ -23,21 +23,38 @@
             <ul class="list-unstyled mb-0">
               {% for ev in items %}
               <li class="p-2 hover-bg rounded mb-2">
-                <div class="small text-muted">
-                  {{ ev.start.strftime("%I:%M %p").lstrip("0") }}
-                  –
-                  {{ ev.end.strftime("%I:%M %p").lstrip("0") }}
+                <div class="d-flex justify-content-between align-items-start">
+                  <div class="me-2">
+                    <div class="small text-muted">
+                      {{ ev.start.strftime("%I:%M %p").lstrip("0") }}
+                      –
+                      {{ ev.end.strftime("%I:%M %p").lstrip("0") }}
+                      {% if ev.location %} • {{ ev.location }}{% endif %}
+                    </div>
+                    <div class="fw-semibold">
+                      {{ ev.summary }}
+                      {% if ev.source == 'db' %}
+                        <span class="badge bg-info text-dark ms-1">Custom</span>
+                      {% endif %}
+                    </div>
+
+                    {% if ev.description %}
+                      <details class="mt-1">
+                        <summary class="small">Notes</summary>
+                        <div class="small" style="white-space: pre-wrap;">{{ ev.description }}</div>
+                      </details>
+                    {% endif %}
+                  </div>
+
+                  {% if ev.custom_id %}
+                  <form method="post"
+                        action="{{ url_for('calendar_ui.events_delete', event_id=ev.custom_id) }}"
+                        onsubmit="return confirm('Delete this event?');"
+                        class="ms-2">
+                    <button class="btn btn-sm btn-outline-danger">Delete</button>
+                  </form>
+                  {% endif %}
                 </div>
-                <div class="fw-semibold">{{ ev.summary }}</div>
-                {% if ev.location %}
-                  <div class="small text-muted">{{ ev.location }}</div>
-                {% endif %}
-                {% if ev.description %}
-                  <details class="mt-1">
-                    <summary class="small">Notes</summary>
-                    <div class="small" style="white-space: pre-wrap;">{{ ev.description }}</div>
-                  </details>
-                {% endif %}
               </li>
               {% endfor %}
             </ul>
@@ -50,5 +67,6 @@
     {% endfor %}
   </div>
 </div>
+
 {% include 'partials/add_event_modal.html' ignore missing %}
 {% endblock %}
