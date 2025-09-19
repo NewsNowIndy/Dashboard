@@ -154,12 +154,27 @@ def week_view():
     prev_start = (start_d - timedelta(days=7)).strftime("%Y-%m-%d")
     next_start = (start_d + timedelta(days=7)).strftime("%Y-%m-%d")
 
+    # provide options for the modal
+    db = SessionLocal()
+    try:
+        all_projects = db.query(Project).order_by(Project.name.asc()).all()
+        all_foias = (
+            db.query(FoiaRequest)
+              .order_by(FoiaRequest.request_date.desc())
+              .limit(1000)
+              .all()
+        )
+    finally:
+        db.close()
+
     return render_template(
         "calendar_week.html",
         start=start_d, end=end_d - timedelta(days=1),
         days=list(by_day.items()),
         prev_url=url_for("calendar_ui.week_view", start=prev_start),
-        next_url=url_for("calendar_ui.week_view", start=next_start)
+        next_url=url_for("calendar_ui.week_view", start=next_start),
+        all_projects=all_projects, 
+        all_foias=all_foias
     )
 
 @bp.post("/events/create", endpoint="events_create")
