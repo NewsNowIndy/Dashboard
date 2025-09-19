@@ -366,6 +366,33 @@ class Contact(Base):
         if self.entity and self.entity.strip() and base.lower() != self.entity.strip().lower():
             base = f"{base} — {self.entity}"
         return base
+    
+class WebCapture(Base):
+    __tablename__ = "web_captures"
+
+    id = Column(Integer, primary_key=True)
+    project_id = Column(Integer, ForeignKey("projects.id"), index=True, nullable=True)
+
+    url = Column(Text, nullable=False)
+    title = Column(Text, nullable=True)
+
+    # stored file paths (relative to your UPLOAD_FOLDER or instance folder)
+    html_path = Column(Text, nullable=True)
+    image_path = Column(Text, nullable=True)
+    meta_path  = Column(Text, nullable=True)
+
+    # cryptographic hashes of file contents (hex)
+    sha256_html = Column(String(64), nullable=True, index=True)
+    sha256_image = Column(String(64), nullable=True, index=True)
+
+    # chain-of-custody metadata
+    captured_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    captured_by = Column(String(255), nullable=True)   # username/email if you want
+    user_agent  = Column(Text, nullable=True)
+    source_ip   = Column(String(64), nullable=True)
+    notes       = Column(Text, nullable=True)
+
+    project = relationship("Project", backref="web_captures")
 
 def init_db():
     Base.metadata.create_all(engine)

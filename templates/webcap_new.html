@@ -1,0 +1,27 @@
+{% extends "base.html" %}
+{% block content %}
+<h2 class="mb-3">New Web Capture</h2>
+<form method="post" action="{{ url_for('webcap.create') }}" class="row g-3">
+  <div class="col-12">
+    <label class="form-label">URL</label>
+    <input class="form-control" name="url" placeholder="https://example.com" required>
+  </div>
+  <div class="col-12">
+    <label class="form-label">Title (optional)</label>
+    <input class="form-control" name="title" placeholder="Page title">
+  </div>
+  <div class="col-12 col-md-6">
+    <label class="form-label">Attach to Project (optional)</label>
+    <select class="form-select" name="project_id">
+      <option value=""></option>
+      {% for p in projects %}
+        <option value="{{ p.id }}">{{ p.name }}</option>
+      {% endfor %}
+    </select>
+  </div>
+  <div class="col-12">
+    <button class="btn btn-primary">Create Capture</button>
+    <a class="btn btn-outline-light ms-2" href="{{ url_for('webcap.index') }}">Cancel</a>
+  </div>
+</form>
+{% endblock %}
