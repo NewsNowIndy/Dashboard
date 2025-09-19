@@ -158,6 +158,44 @@ def _resolve_ce_cols():
 CE_START_NAME, CE_END_NAME = _resolve_ce_cols()
 CE_START_COL = getattr(CalendarEvent, CE_START_NAME)
 CE_END_COL   = getattr(CalendarEvent, CE_END_NAME) if CE_END_NAME else None
+NOTE_CANDIDATES = ("notes", "note", "description", "details", "body", "text")
+LOC_CANDIDATES  = ("location", "place", "where")
+
+def _pick_first_attr(obj, names):
+    for n in names:
+        if hasattr(obj, n):
+            return n
+    return None
+
+def _get_note_text(obj) -> str:
+    for n in NOTE_CANDIDATES:
+        if hasattr(obj, n):
+            val = getattr(obj, n)
+            if val:
+                return str(val).strip()
+    return ""
+
+def _set_note_text(obj, value: str | None):
+    if value is None:
+        return
+    target = _pick_first_attr(obj, NOTE_CANDIDATES)
+    if target:
+        setattr(obj, target, value)
+
+def _get_location_text(obj) -> str:
+    for n in LOC_CANDIDATES:
+        if hasattr(obj, n):
+            val = getattr(obj, n)
+            if val:
+                return str(val).strip()
+    return ""
+
+def _set_location_text(obj, value: str | None):
+    if value is None:
+        return
+    target = _pick_first_attr(obj, LOC_CANDIDATES)
+    if target:
+        setattr(obj, target, value)
 
 def _get_start(ev):
     return getattr(ev, CE_START_NAME)
@@ -258,10 +296,14 @@ def week_view():
             if ce_end <= start_dt:  # both aware now
                 continue
 
+            # unified fields
+            ce_loc  = _get_location_text(ce)          # tolerant reader
+            ce_desc = _get_note_text(ce)
+
             events.append({
                 "summary": ce.title or "(No title)",
-                "location": getattr(ce, "location", "") or "",
-                "description": getattr(ce, "notes", "") or "",
+                "location": ce_loc,
+                "description": ce_desc,
                 "start": ce_start,
                 "end": ce_end,
                 "source": "db",
@@ -340,9 +382,10 @@ def events_create():
         _set_start(ev, starts_at)
         if ends_at:
             _set_end(ev, ends_at)
-        ev.location = location
-        ev.notes = notes
-        # optional FKs (keep your field names as-is)
+        
+        _set_location_text(ev, location)
+        _set_note_text(ev, notes)
+
         ev.project_id = project_id
         ev.foia_request_id = foia_id
 

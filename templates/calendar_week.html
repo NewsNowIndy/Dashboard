@@ -31,14 +31,24 @@
                       {{ ev.end.strftime("%I:%M %p").lstrip("0") }}
                       {% if ev.location %} • {{ ev.location }}{% endif %}
                     </div>
+
                     <div class="fw-semibold">
                       {{ ev.summary }}
                       {% if ev.source == 'db' %}
-                        <span class="badge bg-info text-dark ms-1">Custom</span>
+                        <span class="badge bg-info text-dark ms-1">User</span>
                       {% endif %}
                     </div>
 
-                    {% if ev.description %}
+                    {% if ev.source == 'db' %}
+                      {# Always render a collapsible Notes block for user-created events #}
+                      <details class="mt-1">
+                        <summary class="small">Notes</summary>
+                        <div class="small" style="white-space: pre-wrap;">
+                          {{ ev.description if (ev.description and ev.description|trim) else '—' }}
+                        </div>
+                      </details>
+                    {% elif ev.description and ev.description|trim %}
+                      {# For ICS/auto events, keep existing behavior (only if there are notes) #}
                       <details class="mt-1">
                         <summary class="small">Notes</summary>
                         <div class="small" style="white-space: pre-wrap;">{{ ev.description }}</div>
