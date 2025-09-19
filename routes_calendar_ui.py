@@ -10,6 +10,11 @@ import recurring_ical_events
 from urllib.parse import urljoin
 from models import SessionLocal, Project, FoiaRequest
 
+try:
+    from calendar_feed import build_calendar  # returns an icalendar.Calendar
+except Exception:
+    build_calendar = None
+
 bp = Blueprint("calendar_ui", __name__, url_prefix="/calendar")
 
 LOCAL_TZ = ZoneInfo(os.getenv("LOCAL_TZ", "America/Indiana/Indianapolis"))
@@ -40,20 +45,68 @@ def _ics_url() -> str:
     # request.url_root already includes scheme+host and trailing slash.
     return urljoin(request.url_root, "calendar.ics")
 
+def _normalize_to_calendar(obj) -> Calendar | None:
+    """
+    Accepts a Calendar, ICS bytes/str, or an object with to_ical(),
+    and returns an icalendar.Calendar (or None if it can't).
+    """
+    if obj is None:
+        return None
+    if isinstance(obj, Calendar):
+        return obj
+    if isinstance(obj, (bytes, bytearray, str)):
+        try:
+            return Calendar.from_ical(obj)
+        except Exception:
+            return None
+    # objects that provide to_ical()
+    to_ical = getattr(obj, "to_ical", None)
+    if callable(to_ical):
+        try:
+            return Calendar.from_ical(to_ical())
+        except Exception:
+            return None
+    return None
+
+def _build_calendar_local() -> Calendar | None:
+    if build_calendar is None:
+        return None
+    db = SessionLocal()
+    try:
+        projects = db.query(Project).all()
+        foias    = db.query(FoiaRequest).all()
+        try:
+            raw = build_calendar(projects, foias, custom_events=[])
+        except TypeError:
+            raw = build_calendar(projects, foias)
+        return _normalize_to_calendar(raw)
+    finally:
+        db.close()
+
 @bp.route("/")
 @login_required
 def week_view():
     start_d = _parse_start(request.args.get("start"))
     end_d = start_d + timedelta(days=7)
 
-    # Load ICS text
-    ics_url = _ics_url()
-    try:
-        resp = requests.get(ics_url, timeout=10)
-        resp.raise_for_status()
-        cal = Calendar.from_ical(resp.text)
-    except Exception as e:
-        flash(f"Calendar failed to load ({e}). Check CALENDAR_ICS_URL or /calendar.ics.", "warning")
+    cal: Calendar | None = None
+
+    # 1) Try local first (fastest, avoids hairpin)
+    cal = _build_calendar_local()
+
+    if cal is None:
+        ics_url = _ics_url()
+        try:
+            resp = requests.get(ics_url, timeout=10)
+            resp.raise_for_status()
+            cal = _normalize_to_calendar(resp.text)
+        except Exception as e:
+            current_app.logger.warning("Calendar failed to load via HTTP (%s)", e)
+            flash(f"Calendar failed to load ({e}). Check CALENDAR_ICS_URL or /calendar.ics.", "warning")
+            return redirect(url_for("dashboard"))
+
+    if cal is None:
+        flash("Calendar feed could not be parsed.", "warning")
         return redirect(url_for("dashboard"))
 
     # Expand recurring events in [start, end)
@@ -69,10 +122,8 @@ def week_view():
             dtstart = ev.decoded("dtstart")
             dtend   = ev.decoded("dtend", None)
 
-            # Normalize to aware datetimes in LOCAL_TZ
             def _aware(dt):
                 if isinstance(dt, date) and not isinstance(dt, datetime):
-                    # All-day event
                     return datetime.combine(dt, datetime.min.time(), tzinfo=LOCAL_TZ)
                 if dt.tzinfo is None:
                     return dt.replace(tzinfo=LOCAL_TZ)
@@ -87,48 +138,28 @@ def week_view():
                 "description": desc,
                 "start": s,
                 "end": e,
-                "day_key": _monday_of(s.date()) + timedelta(days=s.weekday())  # actual day
+                "day_key": _monday_of(s.date()) + timedelta(days=s.weekday())
             })
         except Exception:
             continue
 
-    # Bucket by day
     by_day = { (start_d + timedelta(days=i)): [] for i in range(7) }
     for ev in events:
         dk = ev["start"].date()
         if dk in by_day:
             by_day[dk].append(ev)
-
-    # Sort each day by start time
     for k in by_day:
         by_day[k].sort(key=lambda x: x["start"])
 
     prev_start = (start_d - timedelta(days=7)).strftime("%Y-%m-%d")
     next_start = (start_d + timedelta(days=7)).strftime("%Y-%m-%d")
 
-    # 🔽 NEW: fetch options for the global “Add Event” modal dropdowns
-    db = SessionLocal()
-    try:
-        all_projects = db.query(Project).order_by(Project.name.asc()).all()
-        all_foias = (
-            db.query(FoiaRequest)
-              .order_by(FoiaRequest.request_date.desc())
-              .limit(1000)
-              .all()
-        )
-    finally:
-        db.close()
-
     return render_template(
         "calendar_week.html",
-        start=start_d,
-        end=end_d - timedelta(days=1),
+        start=start_d, end=end_d - timedelta(days=1),
         days=list(by_day.items()),
         prev_url=url_for("calendar_ui.week_view", start=prev_start),
-        next_url=url_for("calendar_ui.week_view", start=next_start),
-        # 🔽 pass lists so the modal can render dropdowns
-        all_projects=all_projects,
-        all_foias=all_foias,
+        next_url=url_for("calendar_ui.week_view", start=next_start)
     )
 
 @bp.post("/events/create", endpoint="events_create")
