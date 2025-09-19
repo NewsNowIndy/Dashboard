@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 {% block content %}
-<div class="container mt-4">
+<div class="container mt-4 calendar-week">
   <div class="d-flex justify-content-between align-items-center mb-3">
     <h2>Week of {{ start|mdy }} – {{ end|mdy }}</h2>
     <button class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#addCalEventModal">Add Event</button>
@@ -24,7 +24,7 @@
               {% for ev in items %}
               <li class="p-2 hover-bg rounded mb-2">
                 <div class="d-flex justify-content-between align-items-start">
-                  <div class="me-2">
+                  <div class="me-2 text-start align-self-stretch" style="text-align:left !important;">
                     <div class="small text-muted">
                       {{ ev.start.strftime("%I:%M %p").lstrip("0") }}
                       –
@@ -39,19 +39,10 @@
                       {% endif %}
                     </div>
 
-                    {% if ev.source == 'db' %}
-                      {# Always render a collapsible Notes block for user-created events #}
-                      <details class="mt-1">
+                    {% if ev.description and ev.description|trim %}
+                      <details class="mt-1 notes-details">
                         <summary class="small">Notes</summary>
-                        <div class="small" style="white-space: pre-wrap;">
-                          {{ ev.description if (ev.description and ev.description|trim) else '—' }}
-                        </div>
-                      </details>
-                    {% elif ev.description and ev.description|trim %}
-                      {# For ICS/auto events, keep existing behavior (only if there are notes) #}
-                      <details class="mt-1">
-                        <summary class="small">Notes</summary>
-                        <div class="small" style="white-space: pre-wrap;">{{ ev.description }}</div>
+                        <div class="small notes-body">{{ ev.description }}</div>
                       </details>
                     {% endif %}
                   </div>
@@ -79,4 +70,20 @@
 </div>
 
 {% include 'partials/add_event_modal.html' ignore missing %}
+<style>
+  /* Scoped to the week page so it won't affect other pages */
+  .calendar-week .notes-details { text-align: left !important; }
+  .calendar-week .notes-details > summary { text-align: left !important; }
+
+  .calendar-week .notes-body{
+    text-align: left !important;
+    white-space: pre-wrap !important;
+    display: block !important;
+    margin-left: 0 !important;
+    margin-right: auto !important;
+    /* If any parent is using flex centering, these keep the text anchored left */
+    align-self: flex-start !important;
+    justify-content: flex-start !important;
+  }
+</style>
 {% endblock %}
