@@ -47,6 +47,36 @@
     Export Project PDF
   </a>  
 
+<!-- Sources -->
+<div class="card mb-4">
+  <div class="card-header d-flex justify-content-between align-items-center">
+    <strong>Sources</strong>
+    <a class="btn btn-sm btn-outline-primary" href="{{ url_for('contacts.index', project_id=project.id, kind='Source') }}">Manage</a>
+  </div>
+  <div class="card-body p-0">
+    {% if source_contacts %}
+      <ul class="list-group list-group-flush">
+        {% for c in source_contacts %}
+          <li class="list-group-item bg-transparent text-white">
+            <div class="d-flex justify-content-between align-items-center">
+              <div>
+                <div><strong>{{ c.display_name }}</strong></div>
+                <div class="small text-muted">
+                  {% if c.email %}{{ c.email }}{% endif %}{% if c.email and c.phone %} • {% endif %}{% if c.phone %}{{ c.phone }}{% endif %}
+                </div>
+              </div>
+              <a class="btn btn-sm btn-outline-info"
+                  href="{{ url_for('mail.compose') }}?project_id={{ project.id }}">Email</a>
+            </div>
+          </li>
+        {% endfor %}
+      </ul>
+    {% else %}
+      <div class="p-3"><div class="alert alert-secondary mb-0">No sources linked to this project.</div></div>
+    {% endif %}
+  </div>
+</div>  
+
 <!-- Notes (top) -->
 <div class="card mb-4">
   <div class="card-header d-flex justify-content-between align-items-center">
@@ -91,7 +121,8 @@
   </div>
 </div>
 
-<div class="card mt-3">
+<!-- Tips -->
+<div class="card mb-4">
   <div class="card-header d-flex justify-content-between align-items-center">
     <strong>Tips</strong>
     <a class="btn btn-sm btn-outline-primary" href="{{ url_for('tips.index') }}">Open Tips</a>
@@ -131,7 +162,7 @@
 </div>
 
 <!-- Case Notebook -->
-<div class="card mt-3">
+<div class="card mb-4">
   <div class="card-header d-flex justify-content-between align-items-center">
     <strong>Case Notebook</strong>
     <form class="d-flex gap-2" method="post" action="{{ url_for('notebook.add', slug=project.slug) }}">
@@ -175,7 +206,7 @@
   </div>
 </div>
 
-<!-- Documents (existing list) -->
+<!-- Documents -->
 <div class="card mb-4">
   <div class="card-header d-flex justify-content-between align-items-center">
     <strong>Documents</strong>
@@ -242,8 +273,8 @@
   </div>
 </div>
 
-<!-- Media section (always shown) -->
-<div class="card mt-3">
+<!-- Audio/Video -->
+<div class="card mb-4">
   <div class="card-header d-flex justify-content-between align-items-center">
     <strong>Audio/Video</strong>
     <a class="btn btn-sm btn-outline-primary" href="{{ url_for('media.index') }}">Open Media</a>
@@ -334,7 +365,7 @@
 </div>
 
 {% if datasets and datasets|length %}
-<div class="card mt-3">
+<div class="card mb-4">
   <div class="card-header d-flex justify-content-between align-items-center">
     <strong>Workbench Datasets</strong>
     <a class="btn btn-sm btn-outline-primary" href="{{ url_for('workbench_upload') }}">Upload another</a>

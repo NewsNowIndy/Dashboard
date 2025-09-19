@@ -44,6 +44,8 @@ from policies import policies
 from routes_tips import bp as bp_tips
 from routes_calendar_ui import bp as bp_calendar_ui
 from routes_mail import bp as bp_mail
+from routes_contacts import bp as bp_contacts
+from models import ContactType
 
 @event.listens_for(Engine, "connect")
 def _sqlite_pragmas(dbapi_conn, _):
@@ -98,6 +100,7 @@ app.register_blueprint(policies)
 app.register_blueprint(bp_tips)
 app.register_blueprint(bp_calendar_ui)
 app.register_blueprint(bp_mail)
+app.register_blueprint(bp_contacts)
 
 ensure_fts_tables(engine)
 
@@ -112,6 +115,16 @@ os.makedirs(Config.WORKBENCH_DIR, exist_ok=True)
 # -----------------------------
 # Helpers
 # -----------------------------
+
+@app.template_filter("contact_type")
+def contact_type_label(v):
+    if v is None:
+        return ""
+    # Works whether v is an Enum or a plain string
+    s = getattr(v, "value", str(v))
+    # e.g. "ContactType.CONTACT" -> "CONTACT" -> "Contact"
+    s = s.split(".")[-1].replace("_", " ").title()
+    return s
 
 @app.cli.command("tips-sync")
 def tips_sync_cmd():
@@ -1544,6 +1557,7 @@ def project_detail(slug):
     db = SessionLocal()
     try:
         p = db.query(Project).filter(Project.slug == slug).first()
+        source_contacts = [c for c in p.contacts if getattr(c, "kind", None) == ContactType.SOURCE]
         if not p:
             flash("Project not found.")
             return redirect(url_for("projects_index"))
@@ -1601,7 +1615,7 @@ def project_detail(slug):
             "project_detail.html",
             project=p, notes=notes, docs=docs, datasets=datasets,
             media=media, notebook=notebook, tips=tips, derived_titles=derived_titles,
-            all_projects=all_projects, all_foias=all_foias,  # <-- pass through
+            all_projects=all_projects, all_foias=all_foias, source_contacts=source_contacts
         )
     finally:
         db.close()
