@@ -16,7 +16,7 @@ from models import (
     init_db, SessionLocal, engine,
     FoiaRequest, FoiaAttachment, RequestStatus, CourtCase, FoiaEvent, SurroundingCase,
     ProjectDocument, Project, ProjectNote, ProjectStatus,
-    WorkbenchDataset, WorkbenchRecordLink, WorkbenchPdfLink, MediaItem, CaseNotebookEntry, FoiaFollowUp, Tip, CalendarEvent
+    WorkbenchDataset, WorkbenchRecordLink, WorkbenchPdfLink, MediaItem, CaseNotebookEntry, FoiaFollowUp, Tip, CalendarEvent, WebCapture
 )
 from utils import decrypt_file_to_bytes, normalize_request_status, days_until, age_in_days, badge_for_days_left, badge_for_requested_age, send_email
 from sheets_ingest import import_cases_from_csv, import_cases_from_gsheet, import_surrounding_cases_from_csv, import_surrounding_cases_from_gsheet
@@ -46,6 +46,7 @@ from routes_calendar_ui import bp as bp_calendar_ui
 from routes_mail import bp as bp_mail
 from routes_contacts import bp as bp_contacts
 from models import ContactType
+from routes_webcapture import bp as webcap_bp
 
 @event.listens_for(Engine, "connect")
 def _sqlite_pragmas(dbapi_conn, _):
@@ -101,6 +102,7 @@ app.register_blueprint(bp_tips)
 app.register_blueprint(bp_calendar_ui)
 app.register_blueprint(bp_mail)
 app.register_blueprint(bp_contacts)
+app.register_blueprint(webcap_bp)
 
 ensure_fts_tables(engine)
 
@@ -1607,6 +1609,13 @@ def project_detail(slug):
         from tip_helpers import derive_titles_for_missing
         derived_titles = derive_titles_for_missing(tips)
 
+        captures = (
+            db.query(WebCapture)
+              .filter(WebCapture.project_id == p.id)
+              .order_by(WebCapture.captured_at.desc())
+              .all()
+        )
+
         # NEW: for modal
         all_projects = db.query(Project).order_by(Project.name.asc()).all()
         all_foias = db.query(FoiaRequest).order_by(FoiaRequest.request_date.desc()).limit(1000).all()
@@ -1615,7 +1624,7 @@ def project_detail(slug):
             "project_detail.html",
             project=p, notes=notes, docs=docs, datasets=datasets,
             media=media, notebook=notebook, tips=tips, derived_titles=derived_titles,
-            all_projects=all_projects, all_foias=all_foias, source_contacts=source_contacts
+            all_projects=all_projects, all_foias=all_foias, source_contacts=source_contacts, captures=captures
         )
     finally:
         db.close()

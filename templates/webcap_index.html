@@ -1,0 +1,50 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-3">
+  <h2>Web Captures</h2>
+  <a class="btn btn-primary" href="{{ url_for('webcap.new') }}">New Capture</a>
+</div>
+
+{% if rows and rows|length %}
+  <div class="table-responsive">
+    <table class="table table-sm table-hover mb-0 align-middle">
+      <thead class="table-dark">
+        <tr>
+          <th style="width: 36%;">Title</th>
+          <th>Project</th>
+          <th style="width: 220px;">Created</th>
+          <th style="width: 140px;" class="text-end">Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+      {% for wc in rows %}
+        <tr>
+          <td class="text-wrap">
+            <a class="text-decoration-none" href="{{ url_for('webcap.view', cap_id=wc.id) }}">{{ wc.title or 'Untitled' }}</a>
+            <div class="small text-muted">{{ wc.url|truncate(60, True) }}</div>
+          </td>
+          <td>
+            {% if wc.project %}
+              <a href="{{ url_for('project_detail', slug=wc.project.slug) }}">{{ wc.project.name }}</a>
+            {% else %}—{% endif %}
+          </td>
+          <td>
+            {% set when = wc.captured_at or (wc.created_at if wc is defined and wc.created_at is defined else None) %}
+            {{ when|localfmt('%m-%d-%Y %H:%M') if when else '—' }}
+          </td>
+          <td class="text-end">
+            <a class="btn btn-sm btn-outline-info me-2" href="{{ url_for('webcap.view', cap_id=wc.id) }}">Open</a>
+            <form method="post" action="{{ url_for('webcap.delete', cap_id=wc.id) }}" class="d-inline"
+                  onsubmit="return confirm('Delete this capture?');">
+              <button class="btn btn-sm btn-outline-danger">Delete</button>
+            </form>
+          </td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+{% else %}
+  <div class="alert alert-secondary">None</div>
+{% endif %}
+{% endblock %}

@@ -1,0 +1,45 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-3">
+  <h2 class="mb-0">Web Capture</h2>
+  <div class="d-flex gap-2">
+    <a class="btn btn-sm btn-outline-light" href="{{ url_for('webcap.index') }}">All Captures</a>
+    <form method="post"
+          action="{{ url_for('webcap.delete', cap_id=cap.id) }}"
+          onsubmit="return confirm('Delete this capture?');">
+      <button class="btn btn-sm btn-outline-danger">Delete</button>
+    </form>
+  </div>
+</div>
+
+<div class="card">
+  <div class="card-body">
+    {% set when = cap.captured_at or (cap.created_at if cap is defined and cap.created_at is defined else None) %}
+    <div class="mb-2"><b>Created:</b> {{ when|localfmt('%m-%d-%Y %H:%M') if when else '—' }}</div>
+    <div class="mb-2"><b>Title:</b> {{ cap.title or 'Untitled capture' }}</div>
+    <div class="mb-3">
+      <b>Project:</b>
+      {% if project %}
+        <a href="{{ url_for('project_detail', slug=project.slug) }}">{{ project.name }}</a>
+      {% else %}
+        — 
+      {% endif %}
+    </div>
+
+    {% if cap.png_path %}
+      <div class="mb-3">
+        <a class="btn btn-sm btn-outline-info" href="{{ url_for('webcap.file', relpath=cap.png_path) }}" target="_blank">Open Screenshot</a>
+      </div>
+      <div class="mb-3">
+        <img src="{{ url_for('webcap.file', relpath=cap.png_path) }}" alt="Screenshot" class="img-fluid rounded">
+      </div>
+    {% endif %}
+
+    {% if cap.html_path %}
+      <div>
+        <a class="btn btn-sm btn-outline-info" href="{{ url_for('webcap.file', relpath=cap.html_path) }}" target="_blank">Open Archived HTML</a>
+      </div>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}
