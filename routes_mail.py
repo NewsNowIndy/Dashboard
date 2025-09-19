@@ -4,53 +4,50 @@ from flask import Blueprint, render_template, request, redirect, url_for, flash
 from flask_login import login_required
 import os, io
 from email_client import send_via_smtp, send_via_gmail_api
+from models import SessionLocal, Contact, contact_projects
+from sqlalchemy import func
 
 bp = Blueprint("mail", __name__, url_prefix="/mail")
 
 @bp.route("/compose", methods=["GET", "POST"])
 @login_required
 def compose():
-    if request.method == "POST":
-        to = [t.strip() for t in (request.form.get("to") or "").split(",") if t.strip()]
-        subject = (request.form.get("subject") or "").strip()
-        body = (request.form.get("body") or "").strip()
-        mode = (request.form.get("mode") or "smtp").lower()
+    # GET
+    default_from = os.getenv("GMAIL_USER", "") or os.getenv("GMAIL_SENDER", "")
 
-        if not to or not subject:
-            flash("To and Subject are required.", "warning")
-            return redirect(url_for("mail.compose"))
+    # Optional filter: /mail/compose?project_id=123
+    proj_id = (request.args.get("project_id") or "").strip()
 
-        # attachments (optional)
-        attachments = []
-        for f in (request.files.getlist("attachments") or []):
-            if not f or not f.filename:
-                continue
-            buf = io.BytesIO()
-            f.save(buf); buf.seek(0)
-            attachments.append((f.filename, buf.read()))
+    db = SessionLocal()
+    try:
+        if proj_id.isdigit():
+            contacts = (
+                db.query(Contact)
+                .join(contact_projects, contact_projects.c.contact_id == Contact.id)
+                .filter(contact_projects.c.project_id == int(proj_id))
+                .order_by(
+                    func.lower(func.coalesce(Contact.last_name, "")),
+                    func.lower(func.coalesce(Contact.first_name, "")),
+                    func.lower(func.coalesce(Contact.entity, ""))
+                )
+                .all()
+            )
+        else:
+            contacts = (
+                db.query(Contact)
+                .order_by(
+                    func.lower(func.coalesce(Contact.last_name, "")),
+                    func.lower(func.coalesce(Contact.first_name, "")),
+                    func.lower(func.coalesce(Contact.entity, ""))
+                )
+                .all()
+            )
+    finally:
+        db.close()
 
-        try:
-            if mode == "gmailapi":
-                send_via_gmail_api(to, subject, body, attachments)
-            else:
-                send_via_smtp(to, subject, body, attachments)
-            flash("Email sent.", "success")
-            return redirect(url_for("mail.compose"))
-        except Exception as e:
-            flash(f"Send failed: {e}", "danger")
-            return redirect(url_for("mail.compose"))
-
-    # GET -> show form with optional prefilled values
-    default_from = (
-        os.getenv("MAIL_USERNAME")  # <- prefer your SMTP app user
-        or os.getenv("GMAIL_USER")
-        or os.getenv("GMAIL_SENDER", "")
-    )
     return render_template(
         "mail_compose.html",
         default_from=default_from,
-        default_to=request.args.get("to", ""),
-        default_subject=request.args.get("subject", ""),
-        default_body=request.args.get("body", ""),
-        default_mode=(request.args.get("mode", "smtp")).lower()
+        contacts=contacts,          # <-- template will use this to show a picker
+        project_id=proj_id or None  # optional: keep track of where we came from
     )

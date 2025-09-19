@@ -4,9 +4,23 @@
   <h2>Compose Email</h2>
   <form method="post" enctype="multipart/form-data">
     <div class="mb-2"><small class="text-muted">From: {{ default_from }}</small></div>
-    <div class="mb-2">
-      <label class="form-label">To</label>
-      <input name="to" class="form-control" value="{{ default_to or '' }}" placeholder="alice@example.com, bob@example.com">
+    <!-- To (free text) -->
+    <div class="mb-3">
+      <label class="form-label">To (comma-separated)</label>
+      <input type="text" class="form-control" name="to" placeholder="name@example.com, other@example.com">
+    </div>
+
+    <!-- OR pick from contacts -->
+    <div class="mb-3">
+      <label class="form-label">Or choose contacts</label>
+      <select class="form-select" name="contact_ids[]" multiple size="8">
+        {% for c in contacts %}
+          <option value="{{ c.id }}">
+            {{ c.display_name }}{% if c.email %} &lt;{{ c.email }}&gt;{% endif %}
+          </option>
+        {% endfor %}
+      </select>
+      <div class="form-text">Hold Ctrl/Cmd to select multiple.</div>
     </div>
     <div class="mb-2">
       <label class="form-label">Subject</label>

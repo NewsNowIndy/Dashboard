@@ -1,0 +1,68 @@
+{% extends 'base.html' %}
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-3">
+  <h2 class="mb-0">Contacts</h2>
+  <a class="btn btn-primary" href="{{ url_for('contacts.new') }}">Add Contact</a>
+</div>
+
+<form class="row g-2 mb-3" method="get">
+  <div class="col-md-5"><input class="form-control" name="q" placeholder="Search..." value="{{ q or '' }}"></div>
+  <div class="col-md-3">
+    <select class="form-select" name="project_id">
+      <option value="">All Projects</option>
+      {% for p in projects %}
+        <option value="{{ p.id }}" {{ 'selected' if project_id|int == p.id }}>{{ p.name }}</option>
+      {% endfor %}
+    </select>
+  </div>
+  <div class="col-md-2">
+    <select class="form-select" name="kind">
+      <option value="">All Types</option>
+      <option value="Source"  {{ 'selected' if kind=='Source' }}>Source</option>
+      <option value="Contact" {{ 'selected' if kind=='Contact' }}>Contact</option>
+    </select>
+  </div>
+  <div class="col-md-2"><button class="btn btn-outline-light w-100">Filter</button></div>
+</form>
+
+<div class="table-responsive">
+    <table class="table table-sm table-hover align-middle">
+      <thead class="table-dark"><tr>
+        <th>Name</th><th>Entity</th><th>Email</th><th>Phone</th><th>Type</th><th>Project</th><th class="text-end">Actions</th>
+      </tr></thead>
+      <tbody>
+        {% for c in rows %}
+        <tr>
+          <td>{{ c.display_name }}</td>
+          <td>{{ c.entity or '—' }}</td>
+          <td>{{ c.email or '—' }}</td>
+          <td>{{ c.phone or '—' }}</td>
+          <td>{{ c.kind|contact_type }}</td>
+          <td>
+            {% if c.projects %}
+              {% for p in c.projects %}
+                <a href="{{ url_for('project_detail', slug=p.slug) }}">{{ p.name }}</a>{% if not loop.last %}, {% endif %}
+              {% endfor %}
+            {% else %}—{% endif %}
+          </td>
+          <td class="text-end">
+            <a class="btn btn-sm btn-outline-info me-2"
+               href="{{ url_for('contacts.edit', cid=c.id) }}">
+              Edit
+            </a>
+            <form method="post"
+                  action="{{ url_for('contacts.delete', cid=c.id) }}"
+                  class="d-inline"
+                  onsubmit="return confirm('Delete {{ c.display_name|e }}? This cannot be undone.');">
+              <button class="btn btn-sm btn-outline-danger">Delete</button>
+            </form>
+          </td>
+        </tr>
+        {% endfor %}
+        {% if not rows %}
+          <tr><td colspan="7" class="text-center text-muted py-4">No contacts yet.</td></tr>
+        {% endif %}
+      </tbody>
+    </table>
+  </div>
+  {% endblock %}

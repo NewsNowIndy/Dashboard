@@ -1,5 +1,5 @@
 from datetime import datetime, date
-from sqlalchemy import create_engine, Column, Integer, String, Date, DateTime, Enum, ForeignKey, Boolean, Text, Index, Enum as SAEnum, CheckConstraint, func, UniqueConstraint
+from sqlalchemy import create_engine, Column, Integer, String, Date, DateTime, Enum, ForeignKey, Boolean, Text, Index, Enum as SAEnum, CheckConstraint, func, UniqueConstraint, Table
 from sqlalchemy.orm import declarative_base, relationship, sessionmaker
 from config import Config
 from utils import EncryptedBytes
@@ -10,6 +10,14 @@ from werkzeug.security import generate_password_hash, check_password_hash
 engine = create_engine(Config.SQLALCHEMY_DATABASE_URI, future=True)
 SessionLocal = sessionmaker(bind=engine, expire_on_commit=False)
 Base = declarative_base()
+
+contact_projects = Table(
+    "contact_projects",
+    Base.metadata,
+    Column("contact_id", Integer, ForeignKey("contacts.id", ondelete="CASCADE"), primary_key=True),
+    Column("project_id", Integer, ForeignKey("projects.id", ondelete="CASCADE"), primary_key=True),
+    UniqueConstraint("contact_id", "project_id", name="uq_contact_project")
+)
 
 class RequestStatus(str, PyEnum):
     PENDING   = "Pending"
@@ -131,6 +139,13 @@ class Project(Base):
     last_deadline_alert = Column(Date, nullable=True)      # NEW
 
     notes = relationship("ProjectNote", back_populates="project", cascade="all, delete-orphan")
+
+    contacts = relationship(
+        "Contact",
+        secondary=contact_projects,
+        back_populates="projects",
+        lazy="selectin",
+    )
 
 class ProjectNote(Base):
     __tablename__ = "project_notes"
@@ -317,6 +332,40 @@ class CalendarEvent(Base):
 
     project = relationship("Project", lazy="joined", viewonly=True)
     request = relationship("FoiaRequest", lazy="joined", viewonly=True)
+
+class ContactType(str, PyEnum):
+    SOURCE  = "Source"
+    CONTACT = "Contact"
+
+class Contact(Base):
+    __tablename__ = "contacts"
+    id = Column(Integer, primary_key=True)
+
+    first_name = Column(String(120), nullable=True)
+    last_name  = Column(String(120), nullable=True)
+    entity     = Column(String(255), nullable=True)
+    email      = Column(String(255), nullable=True, index=True)
+    phone      = Column(String(64),  nullable=True)
+
+    kind = Column(SAEnum(ContactType), nullable=True)  # dropdown: Source/Contact (optional)
+
+    created_at = Column(DateTime, default=datetime.utcnow, index=True)
+
+    # NEW: many-to-many
+    projects = relationship(
+        "Project",
+        secondary=contact_projects,
+        back_populates="contacts",
+        lazy="joined",
+    )
+
+    @property
+    def display_name(self) -> str:
+        parts = [self.first_name or "", self.last_name or ""]
+        base = " ".join(p for p in parts if p).strip() or (self.entity or "(Unnamed)")
+        if self.entity and self.entity.strip() and base.lower() != self.entity.strip().lower():
+            base = f"{base} — {self.entity}"
+        return base
 
 def init_db():
     Base.metadata.create_all(engine)
