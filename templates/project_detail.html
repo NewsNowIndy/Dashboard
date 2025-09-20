@@ -5,23 +5,26 @@
   <h2 class="mb-0">
     {{ project.name }}
   </h2>
-  <div>
-    <b>Deadline:</b>
+  <form method="post"
+        action="{{ url_for('project_update_deadline', slug=project.slug) }}"
+        class="d-flex align-items-center gap-2 flex-wrap">
+
+    <span class="fw-semibold">Deadline:</span>
+
     {% set badge = project.deadline|daysleft_badge %}
+    {% set n = project.deadline|daysleft_num %}
     <span class="badge {{ badge }}">
-      {% set n = project.deadline|daysleft_num %}
       {{ n if n != "" else "—" }}{% if n != "" %} days{% endif %}
     </span>
-  </div>
-  <form method="post" action="{{ url_for('project_update_deadline', slug=project.slug) }}" class="row g-2">
-    <div class="col-auto">
-      <label class="form-label">Deadline</label>
-      <input type="date" name="deadline" class="form-control"
-            value="{{ project.deadline.strftime('%Y-%m-%d') if project.deadline else '' }}">
-    </div>
-    <div class="col-auto align-self-end">
-      <button class="btn btn-outline-light">Save</button>
-    </div>
+
+    <input type="date"
+          name="deadline"
+          class="form-control form-control-sm w-auto"
+          style="width: 150px; min-width: 120px; padding-inline: .5rem;"
+          value="{{ project.deadline.strftime('%Y-%m-%d') if project.deadline else '' }}"
+          aria-label="Deadline date">
+
+    <button class="btn btn-outline-light btn-sm">Save</button>
   </form>
 
   <!-- Status dropdown -->
@@ -374,7 +377,7 @@
   </div>
   <div class="card-body p-0">
     <table class="table table-sm mb-0">
-      <thead class="table-light">
+      <thead class="table-dark">
         <tr>
           <th>Name</th>
           <th>Uploaded</th>
