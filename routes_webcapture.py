@@ -30,7 +30,7 @@ def _wkhtmltopdf_available():
 
 def url_to_pdf(url: str, out_path: str) -> dict:
     """Try wkhtmltopdf first, then Playwright. Return a metadata dict."""
-    import logging, shutil, subprocess
+    import logging, shutil, subprocess, os
     log = logging.getLogger("app")
 
     ua = os.getenv(
@@ -45,7 +45,9 @@ def url_to_pdf(url: str, out_path: str) -> dict:
         cmd = [
             wkhtml,
             "--enable-local-file-access",
+            # ask nicely to ignore subresource failures
             "--load-error-handling", "ignore",
+            "--load-media-error-handling", "ignore",
             "--custom-header", "User-Agent", ua,
             "--no-stop-slow-scripts",
             "--javascript-delay", "2000",
@@ -53,47 +55,40 @@ def url_to_pdf(url: str, out_path: str) -> dict:
         ]
         try:
             subprocess.check_call(cmd)
-            return {
-                "ok": True,
-                "engine": "wkhtmltopdf",
-                "user_agent": ua,
-                "http_status": None,       # not observable here
-                "content_type": None,      # not observable here
-                "error": None,
-            }
-        except Exception as e:
+            return {"ok": True, "engine": "wkhtmltopdf", "user_agent": ua,
+                    "http_status": None, "content_type": None, "error": None}
+        except subprocess.CalledProcessError as e:
+            # On Render, cookie/consent and CDN 404s often cause code 1.
+            # If PDF exists and is non-empty, accept it.
+            if os.path.exists(out_path) and os.path.getsize(out_path) > 1024:
+                log.warning("wkhtmltopdf returned %s but PDF exists; proceeding", e.returncode)
+                return {"ok": True, "engine": "wkhtmltopdf", "user_agent": ua,
+                        "http_status": None, "content_type": None,
+                        "error": f"wkhtmltopdf exit {e.returncode} (ignored)"}
+            # else, we will try Playwright
             current_app.logger.error("wkhtmltopdf failed", exc_info=True)
 
-    # --- Fallback: Playwright (if installed in your environment) ---
+    # Fallback: Playwright (only if installed in your Render image)
     try:
         from playwright.sync_api import sync_playwright
         with sync_playwright() as p:
             browser = p.chromium.launch()
             context = browser.new_context(user_agent=ua)
             page = context.new_page()
-            resp = page.goto(url, wait_until="networkidle")
+            # Be less strict than "networkidle" for news sites with trackers
+            resp = page.goto(url, wait_until="domcontentloaded", timeout=60000)
+            # give the page a moment for late content/banner to render
+            page.wait_for_timeout(1500)
             page.pdf(path=out_path, print_background=True)
             status = resp.status if resp else None
             ctype = resp.headers.get("content-type") if resp else None
             browser.close()
-        return {
-            "ok": True,
-            "engine": "playwright",
-            "user_agent": ua,
-            "http_status": status,
-            "content_type": ctype,
-            "error": None,
-        }
+        return {"ok": True, "engine": "playwright", "user_agent": ua,
+                "http_status": status, "content_type": ctype, "error": None}
     except Exception as e:
         current_app.logger.error("Playwright PDF failed", exc_info=True)
-        return {
-            "ok": False,
-            "engine": None,
-            "user_agent": ua,
-            "http_status": None,
-            "content_type": None,
-            "error": str(e),
-        }
+        return {"ok": False, "engine": None, "user_agent": ua,
+                "http_status": None, "content_type": None, "error": str(e)}
             
 def _sha256(path: str) -> str:
     h = hashlib.sha256()
