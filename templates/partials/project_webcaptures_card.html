@@ -29,12 +29,20 @@
                   {{ when|localfmt('%m-%d-%Y %H:%M') if when else '—' }}
                 </td>
                 <td class="text-end">
-                  <a class="btn btn-sm btn-outline-info me-2" href="{{ url_for('webcap.view', cap_id=cap.id) }}">Open</a>
-                  <form method="post" action="{{ url_for('webcap.delete', cap_id=cap.id) }}" class="d-inline"
-                        onsubmit="return confirm('Delete this capture?');">
-                    <button class="btn btn-sm btn-outline-danger">Delete</button>
-                  </form>
-                </td>
+                    <a class="btn btn-sm btn-outline-info me-2"
+                       href="{{ url_for('webcap.view', cap_id=cap.id) }}">Open</a>
+                    {% if cap.pdf_path %}
+                      <a class="btn btn-sm btn-outline-secondary me-2"
+                         href="{{ url_for('webcap.file', relpath=cap.pdf_path) }}"
+                         target="_blank">PDF</a>
+                    {% endif %}
+                    <form method="post"
+                          action="{{ url_for('webcap.delete', cap_id=cap.id) }}"
+                          class="d-inline"
+                          onsubmit="return confirm('Delete this capture?');">
+                      <button class="btn btn-sm btn-outline-danger">Delete</button>
+                    </form>
+                  </td>
               </tr>
             {% endfor %}
             </tbody>

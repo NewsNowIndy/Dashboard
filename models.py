@@ -391,6 +391,7 @@ class WebCapture(Base):
     user_agent  = Column(Text, nullable=True)
     source_ip   = Column(String(64), nullable=True)
     notes       = Column(Text, nullable=True)
+    pdf_path = Column(String, nullable=True)
 
     project = relationship("Project", backref="web_captures")
 

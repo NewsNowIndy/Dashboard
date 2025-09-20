@@ -40,6 +40,13 @@
         <a class="btn btn-sm btn-outline-info" href="{{ url_for('webcap.file', relpath=cap.html_path) }}" target="_blank">Open Archived HTML</a>
       </div>
     {% endif %}
+
+    {% if cap.pdf_path %}
+    <a class="btn btn-sm btn-outline-info"
+        href="{{ url_for('webcap.file', relpath=cap.pdf_path) }}"
+        target="_blank">Open PDF</a>
+    {% endif %}
+
   </div>
 </div>
 {% endblock %}
