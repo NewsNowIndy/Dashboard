@@ -73,13 +73,20 @@ def ensure_webcap_columns(engine):
     # Add pdf_path column if missing (SQLite)
     with engine.begin() as conn:
         cols = [r["name"] for r in conn.execute(text("PRAGMA table_info(web_captures)")).mappings()]
-        if "pdf_path" not in cols:
-            conn.execute(text("ALTER TABLE web_captures ADD COLUMN pdf_path TEXT"))
-        if "captured_at" not in cols:
-            conn.execute(text("ALTER TABLE web_captures ADD COLUMN captured_at TEXT"))
-        with engine.begin() as c:
-            cols = [r["name"] for r in c.execute(text("PRAGMA table_info(web_captures)")).mappings()]
-            app.logger.info("web_captures columns: %s", cols)
+
+        def add(colname, ddl):
+            if colname not in cols:
+                conn.execute(text(f"ALTER TABLE web_captures ADD COLUMN {ddl}"))
+
+        add("pdf_path",     "pdf_path TEXT")
+        add("captured_at",  "captured_at TEXT")
+        add("engine",       "engine TEXT")
+        add("user_agent",   "user_agent TEXT")
+        add("http_status",  "http_status INTEGER")
+        add("content_type", "content_type TEXT")
+        add("sha256",       "sha256 TEXT")
+        add("error",        "error TEXT")
+        add("size_bytes",   "size_bytes INTEGER")
 
 app = Flask(__name__)
 app.config.from_object(Config)

@@ -72,4 +72,6 @@ print("torch:",     "ok" if ok("torch")     else "missing")
 PY
 
 # Bind to $PORT for Render
-exec "$PYBIN" -m gunicorn app:app --bind 0.0.0.0:${PORT:-10000}
+exec "$PYBIN" -m gunicorn app:app --bind 0.0.0.0:${PORT:-10000} \
+  --timeout ${GUNICORN_TIMEOUT:-120} --graceful-timeout ${GUNICORN_GRACE:-120} \
+  --workers ${WEB_CONCURRENCY:-2}

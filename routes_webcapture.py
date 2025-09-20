@@ -1,13 +1,13 @@
 # routes_webcapture.py
 from __future__ import annotations
-from flask import Blueprint, render_template, request, redirect, url_for, flash, current_app, send_from_directory, abort
+from flask import Blueprint, render_template, request, redirect, url_for, flash, current_app, send_from_directory, abort, send_file
 from flask_login import login_required, current_user
 from models import SessionLocal, Project, WebCapture
 from webcapture import capture_url
 from datetime import datetime, timezone
 import hashlib, os
 from pathlib import Path
-from sqlalchemy.orm import selectinload
+from sqlalchemy.orm import selectinload, joinedload
 import subprocess, shutil, tempfile
 
 bp = Blueprint("webcap", __name__, url_prefix="/webcap")
@@ -28,52 +28,79 @@ def _utcnow():
 def _wkhtmltopdf_available():
     return shutil.which("wkhtmltopdf") is not None
 
-def url_to_pdf(url: str, out_path: str) -> bool:
-    import subprocess, shutil, logging
+def url_to_pdf(url: str, out_path: str) -> dict:
+    """Try wkhtmltopdf first, then Playwright. Return a metadata dict."""
+    import logging, shutil, subprocess
     log = logging.getLogger("app")
 
-    ua = os.getenv("WEBCAP_USER_AGENT", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                                         "AppleWebKit/537.36 (KHTML, like Gecko) "
-                                         "Chrome/124.0.0.0 Safari/537.36")
+    ua = os.getenv(
+        "WEBCAP_USER_AGENT",
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/124.0.0.0 Safari/537.36"
+    )
 
     wkhtml = shutil.which("wkhtmltopdf")
     if wkhtml:
         cmd = [
-            wkhtml, "--enable-local-file-access",
-            "--load-error-handling", "ignore",           # don’t abort on blocked subresources
-            "--custom-header", "User-Agent", ua,         # spoof UA
-            "--no-stop-slow-scripts", "--javascript-delay", "2000",
-            url, out_path
+            wkhtml,
+            "--enable-local-file-access",
+            "--load-error-handling", "ignore",
+            "--custom-header", "User-Agent", ua,
+            "--no-stop-slow-scripts",
+            "--javascript-delay", "2000",
+            url, out_path,
         ]
         try:
-            subprocess.check_call([
-                "wkhtmltopdf",
-                "--enable-local-file-access",
-                "--custom-header", "User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                                                "AppleWebKit/537.36 (KHTML, like Gecko) "
-                                                "Chrome/124.0.0.0 Safari/537.36",
-                url, out_path
-            ])
-            return True
-        except Exception:
+            subprocess.check_call(cmd)
+            return {
+                "ok": True,
+                "engine": "wkhtmltopdf",
+                "user_agent": ua,
+                "http_status": None,       # not observable here
+                "content_type": None,      # not observable here
+                "error": None,
+            }
+        except Exception as e:
             current_app.logger.error("wkhtmltopdf failed", exc_info=True)
-            # Fallback to Playwright (requires playwright + chromium in build)
-            try:
-                from playwright.sync_api import sync_playwright
-                with sync_playwright() as p:
-                    browser = p.chromium.launch()
-                    context = browser.new_context(user_agent=(
-                        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-                        "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
-                    ))
-                    page = context.new_page()
-                    page.goto(url, wait_until="networkidle")
-                    page.pdf(path=out_path, print_background=True)
-                    browser.close()
-                return True
-            except Exception:
-                current_app.logger.error("Playwright PDF failed", exc_info=True)
-                return False
+
+    # --- Fallback: Playwright (if installed in your environment) ---
+    try:
+        from playwright.sync_api import sync_playwright
+        with sync_playwright() as p:
+            browser = p.chromium.launch()
+            context = browser.new_context(user_agent=ua)
+            page = context.new_page()
+            resp = page.goto(url, wait_until="networkidle")
+            page.pdf(path=out_path, print_background=True)
+            status = resp.status if resp else None
+            ctype = resp.headers.get("content-type") if resp else None
+            browser.close()
+        return {
+            "ok": True,
+            "engine": "playwright",
+            "user_agent": ua,
+            "http_status": status,
+            "content_type": ctype,
+            "error": None,
+        }
+    except Exception as e:
+        current_app.logger.error("Playwright PDF failed", exc_info=True)
+        return {
+            "ok": False,
+            "engine": None,
+            "user_agent": ua,
+            "http_status": None,
+            "content_type": None,
+            "error": str(e),
+        }
+            
+def _sha256(path: str) -> str:
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1024 * 1024), b""):
+            h.update(chunk)
+    return h.hexdigest()
 
 @bp.get("/")
 @login_required
@@ -81,11 +108,11 @@ def index():
     db = SessionLocal()
     try:
         q = db.query(WebCapture).options(selectinload(WebCapture.project))
-        if hasattr(WebCapture, "captured_at"):
-            rows = q.order_by(WebCapture.captured_at.desc(), WebCapture.id.desc()).all()
-        else:
-            rows = q.order_by(WebCapture.id.desc()).all()
-        # after .all(), project is fully loaded; safe to close the session
+        rows = (
+            q.order_by(WebCapture.captured_at.desc(), WebCapture.id.desc()).all()
+            if hasattr(WebCapture, "captured_at")
+            else q.order_by(WebCapture.id.desc()).all()
+        )
         return render_template("webcap_index.html", rows=rows)
     finally:
         db.close()
@@ -103,142 +130,116 @@ def new():
 @bp.post("/create")
 @login_required
 def create():
-    """
-    Create a web capture for a URL (HTML + screenshot + meta), hash+timestamp it,
-    optionally attach to a project, and (if the model supports it) save a PDF too.
-    """
-    from datetime import timezone
-
     url = (request.form.get("url") or "").strip()
-    title = (request.form.get("title") or "").strip()
-    project_id = (request.form.get("project_id") or "").strip()
-    notes = (request.form.get("notes") or "").strip() or None
+    project_id = request.form.get("project_id")
+    project_id = int(project_id) if project_id and project_id.isdigit() else None
 
     if not url:
-        flash("URL is required.", "warning")
-        return redirect(request.referrer or url_for("webcap.new"))
+        flash("Provide a URL to capture.", "warning")
+        return redirect(url_for("webcap.index"))
 
-    # --- run capture ---
-    ua = request.headers.get("User-Agent")
-    root = _store_root()  # base dir we serve from via /webcap/file/<relpath>
-    # keep capture artifacts grouped by day (easier housekeeping)
-    day_dir = os.path.join(root, datetime.utcnow().strftime("%Y-%m-%d"))
-    os.makedirs(day_dir, exist_ok=True)
+    # Store under instance/webcap/YYYY-MM-DD/<token>.pdf
+    base_dir = os.path.join(
+        current_app.instance_path, "webcap",
+        datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    )
+    os.makedirs(base_dir, exist_ok=True)
+    token = hashlib.sha1(f"{url}{datetime.now(timezone.utc).isoformat()}".encode()).hexdigest()[:16]
+    pdf_filename = f"{token}.pdf"
+    pdf_abs = os.path.join(base_dir, pdf_filename)
 
-    try:
-        result = capture_url(url, day_dir, user_agent=ua)
-        # expected keys (best effort): html_path, image_path, meta_path, sha256_html, sha256_image
-    except Exception as e:
-        current_app.logger.exception("capture_url failed")
-        flash(f"Capture failed: {e}", "danger")
-        return redirect(request.referrer or url_for("webcap.new"))
+    meta = url_to_pdf(url, pdf_abs)
 
-    # Build short hash for filenames/identity; include timestamp for uniqueness.
-    stamp = datetime.now(timezone.utc)
-    sha = hashlib.sha256((url + "|" + stamp.isoformat()).encode("utf-8")).hexdigest()[:16]
+    sha = None
+    size = None
+    if meta.get("ok") and os.path.exists(pdf_abs):
+        try: sha = _sha256(pdf_abs)
+        except Exception: current_app.logger.exception("sha256 failed")
+        try: size = os.path.getsize(pdf_abs)
+        except Exception: size = None
 
-    # Make relative paths (so we can serve with /webcap/file/<rel>)
-    def _rel(path):
-        return os.path.relpath(path, root) if path else None
-
-    html_rel = _rel(result.get("html_path"))
-    img_rel  = _rel(result.get("image_path"))
-    meta_rel = _rel(result.get("meta_path"))
-
-    # --- dynamic model field mapping helpers ---
-    def _first_attr(model, *candidates):
-        for n in candidates:
-            if hasattr(model, n):
-                return n
-        return None
-
-    # Map common, potentially-varying column names
-    screenshot_field      = _first_attr(WebCapture, "png_path", "screenshot_path", "image_path")
-    html_field            = _first_attr(WebCapture, "html_path", "html_file", "html_relpath")
-    meta_field            = _first_attr(WebCapture, "meta_path", "metadata_path")
-    image_artifact_field  = _first_attr(WebCapture, "image_path", "artifact_image_path")  # if you store BOTH screenshot_path AND image_path, this lets you keep the raw artifact too
-    ts_field              = _first_attr(WebCapture, "captured_at", "created_at", "timestamp")
-
-    # Base kwargs (only fields that likely exist on most schemas)
-    base = {
-        "project_id": int(project_id) if project_id.isdigit() else None,
-        "url": url,
-        "title": title or url,
-        "notes": notes,
-        "user_agent": ua,
-        "source_ip": request.headers.get("X-Forwarded-For", request.remote_addr),
-        "captured_by": (getattr(current_user, "email", None) or getattr(current_user, "username", None)),
-        "sha256_html": result.get("sha256_html"),
-        "sha256_image": result.get("sha256_image"),
-    }
-
-    # Fill dynamic path/timestamp fields if present on the model
-    if html_field and html_rel:
-        base[html_field] = html_rel
-    if screenshot_field and img_rel:
-        base[screenshot_field] = img_rel
-    if meta_field and meta_rel:
-        base[meta_field] = meta_rel
-    if image_artifact_field and img_rel and image_artifact_field not in base:
-        base[image_artifact_field] = img_rel
-    if ts_field:
-        base[ts_field] = stamp
-
-    # --- optional: render PDF if model supports a pdf_path-like column ---
-    pdf_field = _first_attr(WebCapture, "pdf_path", "pdf_relpath")
-    if pdf_field:
-        try:
-            # put PDF next to other artifacts in the same day directory
-            pdf_abs = os.path.join(day_dir, f"{sha}.pdf")
-            if url_to_pdf(url, pdf_abs):
-                base[pdf_field] = os.path.relpath(pdf_abs, root)
-            else:
-                current_app.logger.warning("PDF generation failed for %s", url)
-        except Exception:
-            current_app.logger.exception("PDF generation threw an exception for %s", url)
-
-    # Only pass attributes that actually exist on the model to avoid TypeError
-    wc_kwargs = {k: v for k, v in base.items() if hasattr(WebCapture, k)}
+    # store a *relative* path from instance/ so we can serve via /webcap/file/<rel>
+    rel_pdf_path = os.path.relpath(pdf_abs, current_app.instance_path) if os.path.exists(pdf_abs) else None
 
     db = SessionLocal()
     try:
-        wc = WebCapture(**wc_kwargs)
-        db.add(wc)
+        cap = WebCapture(
+            project_id=project_id,
+            url=url,
+            pdf_path=rel_pdf_path,
+            captured_at=datetime.now(timezone.utc).isoformat(),
+            engine=meta.get("engine"),
+            user_agent=meta.get("user_agent"),
+            http_status=meta.get("http_status"),
+            content_type=meta.get("content_type"),
+            sha256=sha,
+            error=meta.get("error"),
+            size_bytes=size,
+            captured_by=meta.get("captured_by"),
+            source_ip=meta.get("source_ip"),
+        )
+        db.add(cap)
         db.commit()
-        flash("Web capture saved.", "success")
-
-        # If attached to a project, redirect there; else go to the capture view
-        if getattr(wc, "project_id", None):
-            proj = db.get(Project, wc.project_id)
-            if proj:
-                return redirect(url_for("project_detail", slug=proj.slug))
-        return redirect(url_for("webcap.view", cap_id=wc.id))
+        flash("Web capture saved." if meta.get("ok") else "Capture saved with errors — see details.",
+              "success" if meta.get("ok") else "warning")
+        return redirect(url_for("webcap.view", cap_id=cap.id))
     finally:
         db.close()
 
-@bp.get("/view/<int:cap_id>")
+@bp.get("/<int:cap_id>", endpoint="view")
 @login_required
-def view(cap_id: int):
+def webcap_view(cap_id):
     db = SessionLocal()
     try:
-        wc = (
+        cap = (
             db.query(WebCapture)
-              .options(selectinload(WebCapture.project))
-              .get(cap_id)
+              .options(joinedload(WebCapture.project))
+              .filter(WebCapture.id == cap_id)
+              .first()
         )
-        if not wc:
-            abort(404)
-        return render_template("webcap_view.html", cap=wc)
+        if not cap:
+            flash("Capture not found.", "warning")
+            return redirect(url_for("webcap.index"))
+        return render_template("webcap_view.html", cap=cap)
+    finally:
+        db.close()
+
+@bp.get("/<int:cap_id>/download", endpoint="download")
+@login_required
+def webcap_download(cap_id: int):
+    """Download the generated PDF for a web capture."""
+    db = SessionLocal()
+    try:
+        cap = db.query(WebCapture).filter(WebCapture.id == cap_id).first()
+        if not cap:
+            flash("Capture not found.", "warning")
+            return redirect(url_for("webcap.index"))
+
+        rel = (cap.pdf_path or "").strip()
+        if not rel:
+            flash("PDF file not found for this capture.", "warning")
+            return redirect(url_for("webcap.view", cap_id=cap.id))
+
+        abs_path = os.path.join(current_app.instance_path, rel)
+        if not os.path.exists(abs_path):
+            flash("PDF file not found on disk.", "warning")
+            return redirect(url_for("webcap.view", cap_id=cap.id))
+
+        return send_file(
+            abs_path,
+            mimetype="application/pdf",
+            as_attachment=True,
+            download_name=os.path.basename(abs_path) or f"capture-{cap.id}.pdf",
+        )
     finally:
         db.close()
 
 @bp.get("/file/<path:relpath>")
 @login_required
 def file(relpath: str):
-    # serve stored artifacts read-only
-    root = _store_root()
-    abs_path = os.path.join(root, relpath)
-    if not abs_path.startswith(root) or not os.path.exists(abs_path):
+    # Serve artifacts from instance/…/webcap
+    abs_path = os.path.join(current_app.instance_path, relpath)
+    if not abs_path.startswith(current_app.instance_path) or not os.path.exists(abs_path):
         abort(404)
     directory, filename = os.path.split(abs_path)
     return send_from_directory(directory, filename, as_attachment=False)
