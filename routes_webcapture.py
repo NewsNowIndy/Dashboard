@@ -9,11 +9,20 @@ import hashlib, os
 from pathlib import Path
 from sqlalchemy.orm import selectinload, joinedload
 import subprocess, shutil, tempfile
+from werkzeug.utils import safe_join
 
 bp = Blueprint("webcap", __name__, url_prefix="/webcap")
 
 WEB_CAP_DIR = Path(os.getenv("WEB_CAP_DIR", "webcap_store")).resolve()
 WEB_CAP_DIR.mkdir(parents=True, exist_ok=True)
+
+def _cap_root() -> str:
+    # single source of truth; falls back to instance/webcap
+    root = os.getenv("WEB_CAP_ROOT")
+    if not root:
+        root = os.path.join(current_app.instance_path, "webcap")
+    os.makedirs(root, exist_ok=True)
+    return root
 
 def _store_root():
     # Reuse your UPLOAD_FOLDER; fall back to instance path
@@ -176,16 +185,18 @@ def create():
         return redirect(url_for("webcap.index"))
 
     # Storage root: instance/webcap/YYYY-MM-DD/
-    day_dir = os.path.join(
-        current_app.instance_path, "webcap",
-        datetime.now(timezone.utc).strftime("%Y-%m-%d")
-    )
+    root = _cap_root()
+    day_dir = os.path.join(root, datetime.now(timezone.utc).strftime("%Y-%m-%d"))
     os.makedirs(day_dir, exist_ok=True)
 
     token = hashlib.sha1(f"{url}{datetime.now(timezone.utc).isoformat()}".encode()).hexdigest()[:16]
-    pdf_abs  = os.path.join(day_dir, f"{token}.pdf")
-    html_abs = os.path.join(day_dir, f"{token}.html")
-    png_abs  = os.path.join(day_dir, f"{token}.png")
+    pdf_filename = f"{token}.pdf"
+    png_filename = f"{token}.png"
+    html_filename = f"{token}.html"
+
+    pdf_abs  = os.path.join(day_dir, pdf_filename)
+    png_abs  = os.path.join(day_dir, png_filename)
+    html_abs = os.path.join(day_dir, html_filename)
 
     # -------- 1) PDF capture --------
     meta = url_to_pdf(url, pdf_abs)
@@ -204,7 +215,7 @@ def create():
             size = None
 
     # Relative PDF path (from instance/)
-    rel_pdf_path = os.path.relpath(pdf_abs, current_app.instance_path) if os.path.exists(pdf_abs) else None
+    rel_pdf_path  = os.path.relpath(pdf_abs,  _cap_root()) if os.path.exists(pdf_abs)  else None
 
     # -------- 2) Fetch & archive HTML + extract <title> --------
     ua = (
@@ -214,7 +225,7 @@ def create():
            "Chrome/124.0.0.0 Safari/537.36"
     )
     extracted_title = None
-    rel_html_path = None
+    rel_html_path = os.path.relpath(html_abs, _cap_root()) if os.path.exists(html_abs) else None
     sha_html = None
 
     try:
@@ -256,7 +267,7 @@ def create():
         current_app.logger.exception("HTML fetch failed")
 
     # -------- 3) Optional screenshot (best-effort) --------
-    rel_png_path = None
+    rel_png_path  = os.path.relpath(png_abs,  _cap_root()) if os.path.exists(png_abs)  else None
     sha_img = None
     try:
         # url_to_png(url, out_path, user_agent) should return True/False if you implemented it
@@ -375,10 +386,35 @@ def webcap_download(cap_id: int):
 @bp.get("/file/<path:relpath>")
 @login_required
 def file(relpath: str):
-    # Serve artifacts from instance/…/webcap
-    abs_path = os.path.join(current_app.instance_path, relpath)
-    if not abs_path.startswith(current_app.instance_path) or not os.path.exists(abs_path):
+    """
+    Serve artifacts from WEB_CAP_ROOT (or instance/webcap fallback).
+    Accepts stored relative paths like "2025-09-20/abc.pdf" or "webcap/2025-09-20/abc.pdf".
+    Also tolerates absolute paths if they already live under the root.
+    """
+    root = os.path.abspath(_cap_root())
+
+    # normalize input
+    relpath = relpath.lstrip("/")  # avoid leading slash
+    # allow both styles: "webcap/..." or "2025-09-20/..."
+    if relpath.startswith("webcap/"):
+        relpath = relpath[len("webcap/"):]
+
+    # try safe_join under our root
+    abs_path = safe_join(root, relpath)
+    if not abs_path:
         abort(404)
+
+    # as a fallback, if DB accidentally stored an absolute path under the same root, accept it
+    if not os.path.exists(abs_path) and os.path.isabs(relpath):
+        alt = os.path.abspath(relpath)
+        if alt.startswith(root) and os.path.exists(alt):
+            abs_path = alt
+
+    # final existence check
+    if not os.path.exists(abs_path):
+        current_app.logger.warning("webcap.file 404: %s (root=%s)", abs_path, root)
+        abort(404)
+
     directory, filename = os.path.split(abs_path)
     return send_from_directory(directory, filename, as_attachment=False)
 
