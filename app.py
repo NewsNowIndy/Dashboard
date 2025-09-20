@@ -23,7 +23,7 @@ from sheets_ingest import import_cases_from_csv, import_cases_from_gsheet, impor
 from werkzeug.utils import secure_filename
 from werkzeug.exceptions import RequestEntityTooLarge, BadRequest, ClientDisconnected
 from werkzeug.security import generate_password_hash
-from sqlalchemy import func, or_, case, text, desc, event
+from sqlalchemy import func, or_, case, text, desc, event, text
 from sqlalchemy.engine import Engine
 from pdfminer.high_level import extract_text
 from routes_search import bp_search
@@ -69,6 +69,18 @@ def ensure_fts_tables(engine):
         );
         """))
 
+def ensure_webcap_columns(engine):
+    # Add pdf_path column if missing (SQLite)
+    with engine.begin() as conn:
+        cols = [r["name"] for r in conn.execute(text("PRAGMA table_info(web_captures)")).mappings()]
+        if "pdf_path" not in cols:
+            conn.execute(text("ALTER TABLE web_captures ADD COLUMN pdf_path TEXT"))
+        if "captured_at" not in cols:
+            conn.execute(text("ALTER TABLE web_captures ADD COLUMN captured_at TEXT"))
+        with engine.begin() as c:
+            cols = [r["name"] for r in c.execute(text("PRAGMA table_info(web_captures)")).mappings()]
+            app.logger.info("web_captures columns: %s", cols)
+
 app = Flask(__name__)
 app.config.from_object(Config)
 # Flask-Login Setup
@@ -89,6 +101,8 @@ app.config["MAX_FORM_MEMORY_SIZE"] = 128 * 1024 * 1024     # 128 MB memory thres
 app.config["MAX_FORM_PARTS"] = 20000                       # lots of parts for multi-file uploads
 app.config["TRAP_BAD_REQUEST_ERRORS"] = True 
 init_db()
+
+ensure_webcap_columns(engine)
 
 app.register_blueprint(bp_media)
 app.register_blueprint(bp_search)
