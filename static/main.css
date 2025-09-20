@@ -272,6 +272,12 @@
   
   /* Forms: inline labels spacing */
   .form-label { color: var(--text); }
+
+  .col-deadline {
+    flex: 0 0 auto;
+    width: auto;
+    text-align: center;
+  }
   
   /* Tables: header sticky (optional) */
   .table-sticky thead th {
