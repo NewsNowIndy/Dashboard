@@ -20,7 +20,7 @@
     <div class="mb-3">
       <b>Project:</b>
       {% if project %}
-        <a href="{{ url_for('project_detail', slug=project.slug) }}">{{ project.name }}</a>
+        <a href="{{ url_for('project_detail', slug=project.slug) }}">{{ wc.project.name }}</a>
       {% else %}
         — 
       {% endif %}
