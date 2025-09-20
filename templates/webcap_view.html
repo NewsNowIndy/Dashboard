@@ -14,15 +14,16 @@
 
 <div class="card">
   <div class="card-body">
-    {% set when = cap.captured_at or (cap.created_at if cap is defined and cap.created_at is defined else None) %}
+    {% set when = cap.captured_at or cap.created_at %}
     <div class="mb-2"><b>Created:</b> {{ when|localfmt('%m-%d-%Y %H:%M') if when else '—' }}</div>
     <div class="mb-2"><b>Title:</b> {{ cap.title or 'Untitled capture' }}</div>
+
     <div class="mb-3">
       <b>Project:</b>
-      {% if project %}
-        <a href="{{ url_for('project_detail', slug=project.slug) }}">{{ wc.project.name }}</a>
+      {% if cap.project %}
+        <a href="{{ url_for('project_detail', slug=cap.project.slug) }}">{{ cap.project.name }}</a>
       {% else %}
-        — 
+        —
       {% endif %}
     </div>
 
@@ -42,11 +43,37 @@
     {% endif %}
 
     {% if cap.pdf_path %}
-    <a class="btn btn-sm btn-outline-info"
-        href="{{ url_for('webcap.file', relpath=cap.pdf_path) }}"
-        target="_blank">Open PDF</a>
+      <a class="btn btn-sm btn-outline-info"
+         href="{{ url_for('webcap.file', relpath=cap.pdf_path) }}"
+         target="_blank">Open PDF</a>
     {% endif %}
+  </div>
 
+  <div class="card mt-3">
+    <div class="card-header">Chain of Custody</div>
+    <div class="card-body">
+      <dl class="row">
+        <dt class="col-sm-4">Captured By</dt><dd class="col-sm-8">{{ cap.captured_by or "n/a" }}</dd>
+        <dt class="col-sm-4">Captured At</dt><dd class="col-sm-8">{{ cap.captured_at|localfmt if cap.captured_at else '—' }}</dd>
+        <dt class="col-sm-4">Source URL</dt><dd class="col-sm-8"><a href="{{ cap.url }}" target="_blank" rel="noopener">{{ cap.url }}</a></dd>
+        <dt class="col-sm-4">Source IP</dt><dd class="col-sm-8">{{ cap.source_ip or "n/a" }}</dd>
+        <dt class="col-sm-4">Engine</dt><dd class="col-sm-8">{{ cap.engine or "wkhtmltopdf" }}</dd>
+        <dt class="col-sm-4">HTTP Status</dt><dd class="col-sm-8">{{ cap.http_status or "n/a" }}</dd>
+        <dt class="col-sm-4">User-Agent</dt><dd class="col-sm-8"><code>{{ cap.user_agent or "n/a" }}</code></dd>
+        <dt class="col-sm-4">Content-Type</dt><dd class="col-sm-8">{{ cap.content_type or "n/a" }}</dd>
+        <dt class="col-sm-4">File</dt>
+        <dd class="col-sm-8">
+          {% if cap.pdf_path %}
+            <a href="{{ url_for('webcap.download', cap_id=cap.id) }}">Download PDF</a>
+            {% if cap.size_bytes %} ({{ (cap.size_bytes/1024/1024)|round(2) }} MB){% endif %}
+          {% else %} — {% endif %}
+        </dd>
+        <dt class="col-sm-4">SHA-256</dt><dd class="col-sm-8"><code>{{ cap.sha256 or "n/a" }}</code></dd>
+        {% if cap.error %}
+          <dt class="col-sm-4 text-danger">Errors</dt><dd class="col-sm-8 text-danger">{{ cap.error }}</dd>
+        {% endif %}
+      </dl>
+    </div>
   </div>
 </div>
 {% endblock %}
