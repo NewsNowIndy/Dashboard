@@ -70,23 +70,25 @@ def ensure_fts_tables(engine):
         """))
 
 def ensure_webcap_columns(engine):
-    # Add pdf_path column if missing (SQLite)
+    want = {
+        "pdf_path": "TEXT",
+        "captured_at": "TEXT",
+        "engine": "TEXT",
+        "user_agent": "TEXT",
+        "http_status": "INTEGER",
+        "content_type": "TEXT",
+        "sha256": "TEXT",
+        "size_bytes": "INTEGER",
+        "error": "TEXT",
+        "html_path": "TEXT",
+        "png_path": "TEXT",
+        "title": "TEXT",
+    }
     with engine.begin() as conn:
-        cols = [r["name"] for r in conn.execute(text("PRAGMA table_info(web_captures)")).mappings()]
-
-        def add(colname, ddl):
-            if colname not in cols:
-                conn.execute(text(f"ALTER TABLE web_captures ADD COLUMN {ddl}"))
-
-        add("pdf_path",     "pdf_path TEXT")
-        add("captured_at",  "captured_at TEXT")
-        add("engine",       "engine TEXT")
-        add("user_agent",   "user_agent TEXT")
-        add("http_status",  "http_status INTEGER")
-        add("content_type", "content_type TEXT")
-        add("sha256",       "sha256 TEXT")
-        add("error",        "error TEXT")
-        add("size_bytes",   "size_bytes INTEGER")
+        existing = [r["name"] for r in conn.execute(text("PRAGMA table_info(web_captures)")).mappings()]
+        for col, dtype in want.items():
+            if col not in existing:
+                conn.execute(text(f"ALTER TABLE web_captures ADD COLUMN {col} {dtype}"))
 
 app = Flask(__name__)
 app.config.from_object(Config)
