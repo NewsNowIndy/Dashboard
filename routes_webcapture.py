@@ -46,27 +46,34 @@ def url_to_pdf(url: str, out_path: str) -> bool:
             url, out_path
         ]
         try:
-            subprocess.check_call(cmd)
+            subprocess.check_call([
+                "wkhtmltopdf",
+                "--enable-local-file-access",
+                "--custom-header", "User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                                                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                                                "Chrome/124.0.0.0 Safari/537.36",
+                url, out_path
+            ])
             return True
-        except subprocess.CalledProcessError as e:
-            log.error("wkhtmltopdf failed: %s", e)
-
-    # --- Option B: Playwright (headless Chromium) ---
-    try:
-        from playwright.sync_api import sync_playwright
-        with sync_playwright() as p:
-            browser = p.chromium.launch(args=["--no-sandbox"])
-            context = browser.new_context(user_agent=ua)
-            page = context.new_page()
-            page.goto(url, wait_until="domcontentloaded", timeout=30000)
-            page.wait_for_timeout(1500)  # tiny settle
-            # Print-to-PDF produces clean PDFs; full-page screenshot-as-PDF alternative also works
-            page.pdf(path=out_path, format="Letter", print_background=True)
-            browser.close()
-            return True
-    except Exception as e:
-        log.error("Playwright PDF failed: %s", e)
-        return False
+        except Exception:
+            current_app.logger.error("wkhtmltopdf failed", exc_info=True)
+            # Fallback to Playwright (requires playwright + chromium in build)
+            try:
+                from playwright.sync_api import sync_playwright
+                with sync_playwright() as p:
+                    browser = p.chromium.launch()
+                    context = browser.new_context(user_agent=(
+                        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                        "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+                    ))
+                    page = context.new_page()
+                    page.goto(url, wait_until="networkidle")
+                    page.pdf(path=out_path, print_background=True)
+                    browser.close()
+                return True
+            except Exception:
+                current_app.logger.error("Playwright PDF failed", exc_info=True)
+                return False
 
 @bp.get("/")
 @login_required
