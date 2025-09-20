@@ -52,54 +52,77 @@ def new():
 @bp.post("/create")
 @login_required
 def create():
+    # Local import so this works even if you didn't change the module imports yet
+    from datetime import timezone
+    import hashlib
+    import os
+
     url = (request.form.get("url") or "").strip()
     title = (request.form.get("title") or "").strip()
-    project_id = request.form.get("project_id") or None
+    project_id = (request.form.get("project_id") or "").strip()
     notes = (request.form.get("notes") or "").strip() or None
+
     if not url:
         flash("URL is required.", "warning")
         return redirect(request.referrer or url_for("webcap.new"))
 
-    # paths for your own storage (if you’re also keeping copies here)
-    stamp_id = hashlib.sha256((url + "|" + datetime.utcnow().strftime("%Y%m%d%H%M%S")).encode("utf-8")).hexdigest()
-    html_rel = f"{stamp_id}/page.html"
-    png_rel  = f"{stamp_id}/screenshot.png"
-    (WEB_CAP_DIR / stamp_id).mkdir(parents=True, exist_ok=True)
+    # Build paths we can store on the model regardless of how capture_url writes files
+    stamp = datetime.now(timezone.utc)
+    sha = hashlib.sha256(f"{url}|{stamp.isoformat()}".encode("utf-8")).hexdigest()
+    html_rel = f"{sha}/page.html"
+    png_rel  = f"{sha}/screenshot.png"
 
-    # do the capture
+    # Do the capture (to our storage root, grouped by day)
     ua = request.headers.get("User-Agent")
     root = _store_root()
     day_dir = os.path.join(root, datetime.utcnow().strftime("%Y-%m-%d"))
     try:
-        result = capture_url(url, day_dir, user_agent=ua)  # returns image_path/meta_path + hashes
+        result = capture_url(url, day_dir, user_agent=ua)  # expected keys: image_path, meta_path, sha256_html, sha256_image
     except Exception as e:
+        current_app.logger.exception("capture_url failed")
         flash(f"Capture failed: {e}", "danger")
         return redirect(request.referrer or url_for("webcap.new"))
 
-    # ---------- REPLACE YOUR OLD "persist record" WITH THIS ----------
-    stamp = _utcnow()  # timezone-aware now()
+    # ---- Build model-safe kwargs (support different column names) ----
+    def _first_attr(model, *candidates):
+        for n in candidates:
+            if hasattr(model, n):
+                return n
+        return None
 
-    wc_kwargs = dict(
-        project_id=int(project_id) if project_id and project_id.isdigit() else None,
-        url=url,
-        title=title or url,
-        html_path=html_rel,                 # your own relative storage path (optional)
-        png_path=png_rel,                   # your own relative storage path (optional)
-        image_path=os.path.relpath(result.get("image_path", ""), _store_root()) if result.get("image_path") else None,
-        meta_path=os.path.relpath(result.get("meta_path", ""), _store_root()) if result.get("meta_path") else None,
-        sha256_html=result.get("sha256_html"),
-        sha256_image=result.get("sha256_image"),
-        captured_by=(getattr(current_user, "email", None) or getattr(current_user, "username", None)),
-        user_agent=ua,
-        source_ip=request.headers.get("X-Forwarded-For", request.remote_addr),
-        notes=notes,
-    )
+    # Map model-specific field names if they exist
+    screenshot_field       = _first_attr(WebCapture, "png_path", "screenshot_path", "image_path")
+    html_field             = _first_attr(WebCapture, "html_path", "html_file", "html_relpath")
+    meta_field             = _first_attr(WebCapture, "meta_path", "metadata_path")
+    image_artifact_field   = _first_attr(WebCapture, "image_path", "artifact_image_path")  # separate from screenshot if present
+    ts_field               = _first_attr(WebCapture, "captured_at", "created_at", "timestamp")
 
-    # Prefer captured_at if the column exists; else fall back to created_at
-    if hasattr(WebCapture, "captured_at"):
-        wc_kwargs["captured_at"] = stamp
-    elif hasattr(WebCapture, "created_at"):
-        wc_kwargs["created_at"] = stamp
+    base = {
+        "project_id": int(project_id) if project_id.isdigit() else None,
+        "url": url,
+        "title": title or url,
+        "notes": notes,
+        "user_agent": ua,
+        "source_ip": request.headers.get("X-Forwarded-For", request.remote_addr),
+        "captured_by": (getattr(current_user, "email", None) or getattr(current_user, "username", None)),
+        "sha256_html": result.get("sha256_html"),
+        "sha256_image": result.get("sha256_image"),
+    }
+
+    # Fill dynamic fields if present on your model
+    if html_field:
+        base[html_field] = html_rel
+    if screenshot_field:
+        base[screenshot_field] = png_rel
+    if meta_field and result.get("meta_path"):
+        base[meta_field] = os.path.relpath(result["meta_path"], root)
+    if image_artifact_field and result.get("image_path"):
+        base[image_artifact_field] = os.path.relpath(result["image_path"], root)
+    if ts_field:
+        base[ts_field] = stamp
+
+    # Only pass attributes that actually exist on the model to avoid TypeError
+    wc_kwargs = {k: v for k, v in base.items() if hasattr(WebCapture, k)}
 
     db = SessionLocal()
     try:
@@ -107,9 +130,12 @@ def create():
         db.add(wc)
         db.commit()
         flash("Web capture saved.", "success")
-        if wc.project_id:
+
+        if getattr(wc, "project_id", None):
             proj = db.get(Project, wc.project_id)
-            return redirect(url_for("project_detail", slug=proj.slug))
+            if proj:
+                return redirect(url_for("project_detail", slug=proj.slug))
+
         return redirect(url_for("webcap.view", cap_id=wc.id))
     finally:
         db.close()
