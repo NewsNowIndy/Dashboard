@@ -59,17 +59,15 @@
         <dt class="col-sm-4">HTTP Status</dt><dd class="col-sm-8">{{ cap.http_status or "n/a" }}</dd>
         <dt class="col-sm-4">User-Agent</dt><dd class="col-sm-8"><code>{{ cap.user_agent or "n/a" }}</code></dd>
         <dt class="col-sm-4">Content-Type</dt><dd class="col-sm-8">{{ cap.content_type or "n/a" }}</dd>
-        <dt class="col-sm-4">Size Bytes</dt><dd class="col-sm-8">{{ cap.size_bytes or "n/a" }}</dd>
+        <dt class="col-sm-4">Size Bytes</dt><dd class="col-sm-8">{{ (cap.size_bytes/1024/1024)|round(2) or "n/a" }} MB</dd>
         <dt class="col-sm-4">PDF Path</dt><dd class="col-sm-8">{{ cap.pdf_path or "n/a" }}</dd>
+        <dt class="col-sm-4 text-danger">Errors</dt><dd class="col-sm-8 text-danger">{{ cap.error or "n/a" }}</dd>
         <dd class="col-sm-8">
           {% if cap.pdf_path %}
             <a href="{{ url_for('webcap.download', cap_id=cap.id) }}">Download PDF</a>
             {% if cap.size_bytes %} ({{ (cap.size_bytes/1024/1024)|round(2) }} MB){% endif %}
           {% else %} — {% endif %}
         </dd>
-        {% if cap.error %}
-          <dt class="col-sm-4 text-danger">Errors</dt><dd class="col-sm-8 text-danger">{{ cap.error }}</dd>
-        {% endif %}
       </dl>
     </div>
   </div>
