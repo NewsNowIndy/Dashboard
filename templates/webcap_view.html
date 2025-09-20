@@ -27,12 +27,10 @@
       {% endif %}
     </div>
 
-    {% if cap.png_path %}
-      <div class="mb-3">
-        <a class="btn btn-sm btn-outline-info" href="{{ url_for('webcap.file', relpath=cap.png_path) }}" target="_blank">Open Screenshot</a>
-      </div>
-      <div class="mb-3">
-        <img src="{{ url_for('webcap.file', relpath=cap.png_path) }}" alt="Screenshot" class="img-fluid rounded">
+    {% if cap.image_path %}
+      <div>
+        <a class="btn btn-sm btn-outline-info"
+          href="{{ url_for('webcap.file', relpath=cap.image_path) }}" target="_blank">Open Screenshot</a>
       </div>
     {% endif %}
 
@@ -61,14 +59,14 @@
         <dt class="col-sm-4">HTTP Status</dt><dd class="col-sm-8">{{ cap.http_status or "n/a" }}</dd>
         <dt class="col-sm-4">User-Agent</dt><dd class="col-sm-8"><code>{{ cap.user_agent or "n/a" }}</code></dd>
         <dt class="col-sm-4">Content-Type</dt><dd class="col-sm-8">{{ cap.content_type or "n/a" }}</dd>
-        <dt class="col-sm-4">File</dt>
+        <dt class="col-sm-4">Size Bytes</dt><dd class="col-sm-8">{{ cap.size_bytes or "n/a" }}</dd>
+        <dt class="col-sm-4">PDF Path</dt><dd class="col-sm-8">{{ cap.pdf_path or "n/a" }}</dd>
         <dd class="col-sm-8">
           {% if cap.pdf_path %}
             <a href="{{ url_for('webcap.download', cap_id=cap.id) }}">Download PDF</a>
             {% if cap.size_bytes %} ({{ (cap.size_bytes/1024/1024)|round(2) }} MB){% endif %}
           {% else %} — {% endif %}
         </dd>
-        <dt class="col-sm-4">SHA-256</dt><dd class="col-sm-8"><code>{{ cap.sha256 or "n/a" }}</code></dd>
         {% if cap.error %}
           <dt class="col-sm-4 text-danger">Errors</dt><dd class="col-sm-8 text-danger">{{ cap.error }}</dd>
         {% endif %}

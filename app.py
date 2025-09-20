@@ -72,17 +72,32 @@ def ensure_fts_tables(engine):
 def ensure_webcap_columns(engine):
     want = {
         "pdf_path": "TEXT",
-        "captured_at": "TEXT",
-        "engine": "TEXT",
+        "html_path": "TEXT",
+        "image_path": "TEXT",
+        "meta_path": "TEXT",
+
+        "title": "TEXT",
+
+        # custody & env
+        "captured_at": "DATETIME",
+        "captured_by": "TEXT",
         "user_agent": "TEXT",
+        "source_ip": "TEXT",
+        "notes": "TEXT",
+
+        # engine/response
+        "engine": "TEXT",
         "http_status": "INTEGER",
         "content_type": "TEXT",
+
+        # file stats
         "sha256": "TEXT",
         "size_bytes": "INTEGER",
         "error": "TEXT",
-        "html_path": "TEXT",
-        "png_path": "TEXT",
-        "title": "TEXT",
+
+        # optional older fields you already had
+        "sha256_html": "TEXT",
+        "sha256_image": "TEXT",
     }
     with engine.begin() as conn:
         existing = [r["name"] for r in conn.execute(text("PRAGMA table_info(web_captures)")).mappings()]

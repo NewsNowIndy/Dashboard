@@ -64,10 +64,9 @@
             <ul class="dropdown-menu" aria-labelledby="dataMenu">
               <li class="nav-item"><a class="nav-link" href="{{ url_for('search.search') }}">Search</a></li>
               <li class="nav-item"><a class="nav-link" href="{{ url_for('entities.entities_index') }}">People/Orgs</a></li>
+              <li class="nav-item"><a class="nav-link" href="{{ url_for('webcap.index') }}">Webcap</a></li>
+              <li class="nav-item"><a class="nav-link" href="{{ url_for('media.index') }}">Media</a></li>
             </ul>
-          </li>
-          <li class="nav-item">
-            <a class="nav-link" href="{{ url_for('media.index') }}">Media</a>
           </li>
           <li class="nav-item">
             <a class="nav-link" href="{{ url_for('tips.index') }}">Tips</a>
@@ -84,9 +83,6 @@
           </li>
           <li class="nav-item">
             <a class="nav-link" href="{{ url_for('contacts.index') }}">Contacts</a>
-          </li>
-          <li class="nav-item">
-            <a class="nav-link" href="{{ url_for('webcap.index') }}">Webcap</a>
           </li>
         </ul>
         </div class="d-flex align-items-center gap-2">

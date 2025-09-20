@@ -380,6 +380,7 @@ class WebCapture(Base):
     html_path = Column(Text, nullable=True)
     image_path = Column(Text, nullable=True)
     meta_path  = Column(Text, nullable=True)
+    pdf_path = Column(Text, nullable=True)
 
     # cryptographic hashes of file contents (hex)
     sha256_html = Column(String(64), nullable=True, index=True)
@@ -391,7 +392,16 @@ class WebCapture(Base):
     user_agent  = Column(Text, nullable=True)
     source_ip   = Column(String(64), nullable=True)
     notes       = Column(Text, nullable=True)
-    pdf_path = Column(String, nullable=True)
+
+    # capture engine + HTTP-ish metadata
+    engine       = Column(String(50), nullable=True)
+    http_status  = Column(Integer, nullable=True)
+    content_type = Column(String(255), nullable=True)
+
+    # file stats + error
+    sha256     = Column(String(64), nullable=True)
+    size_bytes = Column(Integer, nullable=True)
+    error      = Column(Text, nullable=True)
 
     project = relationship("Project", backref="web_captures")
 
