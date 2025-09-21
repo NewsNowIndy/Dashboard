@@ -148,6 +148,17 @@
                         · {{ (dur // 3600)|int }}:{% set mm = (dur % 3600) // 60 %}{{ '%02d' % mm }}:{% set ss = dur % 60 %}{{ '%02d' % ss }}
                     {% endif %}
                     {% if m.uploaded_at %} · {{ m.uploaded_at|localfmt("%Y-%m-%d %H:%M") }}{% endif %}
+
+                    {% if m.transcript_text %}
+                        <div class="mt-1">
+                        <details>
+                            <summary class="link-secondary">Transcript</summary>
+                            <div class="mt-1 text-muted" style="white-space: pre-wrap;">
+                            {{ m.transcript_text }}
+                            </div>
+                        </details>
+                        </div>
+                    {% endif %}
                     <form class="d-inline" method="post" action="{{ url_for('storyboard_detach_doc', item_id=it.id) }}">
                         <input type="hidden" name="kind" value="media">
                         <input type="hidden" name="obj_id" value="{{ m.id }}">

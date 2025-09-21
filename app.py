@@ -282,7 +282,10 @@ def _storyboard_item_media(db, project_id, item_ids):
     stmt = text("""
         SELECT sim.item_id,
                m.id AS id,
-               m.title, m.duration_seconds, m.created_at AS uploaded_at
+               m.title, 
+                m.duration_seconds, 
+                m.created_at AS uploaded_at,
+                m.transcript_text
         FROM storyboard_item_media AS sim
         JOIN media_items AS m ON m.id = sim.media_id
         WHERE sim.item_id IN :ids AND m.project_id = :pid
@@ -364,6 +367,17 @@ except Exception:
 # -----------------------------
 # Helpers
 # -----------------------------
+
+@app.template_filter("hms")
+def hms(seconds):
+    try:
+        s = int(float(seconds))
+    except Exception:
+        return ""
+    h = s // 3600
+    m = (s % 3600) // 60
+    sec = s % 60
+    return f"{h}:{m:02d}:{sec:02d}" if h else f"{m}:{sec:02d}"
 
 @app.template_filter("contact_type")
 def contact_type_label(v):
@@ -482,23 +496,42 @@ def daysleft_num(d):
 @app.template_filter("localfmt")
 def localfmt(dt, fmt="%m-%d-%Y %H:%M"):
     """
-    Render datetimes in local Indiana (America/Indiana/Indianapolis) time.
-    If dt is naive, assume it is in UTC.
+    Render date/datetime (or ISO strings) in local Indiana time.
+    - If dt is a string, try to parse it (ISO first).
+    - If dt is a date (no time), render midnight local time.
+    - If dt is a naive datetime, assume UTC.
     """
     if not dt:
         return ""
-    if dt.tzinfo is None:
-        # Assume UTC if naive (adjust if you actually store local times)
-        dt = dt.replace(tzinfo=UTC)
-    return dt.astimezone(LOCAL_TZ).strftime(fmt)
 
-@app.template_filter("enum_value")
-def enum_value(v):
-    """Return Enum.value if present; otherwise the original value."""
-    try:
-        return getattr(v, "value", v)
-    except Exception:
-        return v
+    # Parse strings (Render error: 'str' object has no attribute 'tzinfo')
+    if isinstance(dt, str):
+        s = dt.strip()
+        parsed = None
+        # best effort parsing
+        try:
+            parsed = datetime.fromisoformat(s)
+        except Exception:
+            for f in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M", "%Y-%m-%d"):
+                try:
+                    parsed = datetime.strptime(s, f)
+                    break
+                except Exception:
+                    pass
+        if parsed is None:
+            return s  # fall back to raw string if unparseable
+        dt = parsed
+
+    # If it's a date (no time), render at local midnight
+    if isinstance(dt, date) and not isinstance(dt, datetime):
+        dt = datetime(dt.year, dt.month, dt.day, 0, 0, tzinfo=LOCAL_TZ)
+        return dt.strftime(fmt)
+
+    # At this point it's a datetime
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=UTC)
+
+    return dt.astimezone(LOCAL_TZ).strftime(fmt)
     
 @app.template_filter("norm")
 def norm(s):
