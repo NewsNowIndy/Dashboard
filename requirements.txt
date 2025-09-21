@@ -31,7 +31,6 @@ python-docx>=1.1.2
 # Optional if you want true server-side PDFs:
 weasyprint>=62.3
 pdfkit>=1.0.0
-speech stack (CPU wheels)
 torch==2.4.1
 openai-whisper==20240930
 faster-whisper==1.2.0
