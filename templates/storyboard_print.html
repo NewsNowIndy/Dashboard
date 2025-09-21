@@ -1,0 +1,118 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Story Board — {{ project.name }}</title>
+  <style>
+    /* Safe, print-focused CSS */
+    html, body { background:#fff; color:#000; margin:0; padding:0; }
+    body { font:14px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+    h1 { font-size:22px; margin:0 0 12px 0; border-bottom:1px solid #4a6; padding-bottom:6px; }
+    h3 { font-size:16px; margin:14px 0 6px; }
+    .meta { color:#555; font-style:italic; }
+    ul { margin:6px 0 10px 20px; }
+    hr { border:0; border-top:1px solid #ccc; margin:10px 0; }
+    @page { size: Letter; margin: 12mm; }
+  </style>
+</head>
+<body>
+  <h1>Story Board — {{ project.name }}</h1>
+
+  {% for it in items %}
+    <h3>
+      {{ it.occurred_at|localfmt("%Y-%m-%d %H:%M") }}
+      {% if it.category %}<span class="meta">[{{ it.category }}]</span>{% endif %}
+    </h3>
+    <p><strong>{{ it.title }}</strong></p>
+    {% if it.body %}<p>{{ it.body }}</p>{% endif %}
+
+    {% set item_tips = (attachments_tips|default({})).get(it.id) or [] %}
+    {% if item_tips %}
+      <p class="meta">Tips:</p>
+      <ul>
+        {% for t in item_tips %}
+          <li>{{ t.title or ('Tip #' ~ t.id) }}</li>
+        {% endfor %}
+      </ul>
+    {% endif %}
+
+    {% set item_contacts = (attachments_contacts.get(it.id) or []) %}
+    {% if item_contacts %}
+    <div class="mt-2 small">
+        <span class="text-secondary"><strong>Sources/Contacts:</strong></span>
+        <ul class="mt-1 mb-2">
+        {% for c in item_contacts %}
+            <li>
+            <strong>{{ (c.first_name or '') ~ ' ' ~ (c.last_name or '') | trim }}</strong>
+            — {{ (c.kind or '')|string }}
+            {% if c.email %} · <a class="link-light" href="mailto:{{ c.email }}">{{ c.email }}</a>{% endif %}
+            {% if c.phone %} · {{ c.phone }}{% endif %}
+            {% if c.entity %} · {{ c.entity }}{% endif %}
+            </li>
+        {% endfor %}
+        </ul>
+    </div>
+    {% endif %}
+
+    {% set item_notes = (attachments_notebook.get(it.id) or []) %}
+    {% if item_notes %}
+    <div class="mt-2 small">
+        <span class="text-secondary"><strong>Notebook:</strong></span>
+        <ul class="mt-1 mb-2">
+        {% for n in item_notes %}
+            <li>
+            <strong>{{ n.type or 'Note' }}</strong> — {{ n.title or ('Entry #' ~ n.id) }}
+            {% if n.details %}<div class="text-muted">{{ n.details }}</div>{% endif %}
+            {% if n.when %}<div class="text-muted">{{ n.when|localfmt("%Y-%m-%d %H:%M") }}</div>{% endif %}
+            </li>
+        {% endfor %}
+        </ul>
+    </div>
+    {% endif %}
+
+    {% set item_caps = (attachments_caps|default({})).get(it.id) or [] %}
+    {% if item_caps %}
+      <p class="text-secondary"><strong>Web Captures:</strong></p>
+      <ul>
+        {% for w in item_caps %}
+          <li>
+            {% if w.url %}<a href="{{ w.url }}">{{ w.title or ('Capture #' ~ w.id) }}</a>
+            {% else %}{{ w.title or ('Capture #' ~ w.id) }}{% endif %}
+          </li>
+        {% endfor %}
+      </ul>
+    {% endif %}
+
+    {% set item_docs = (attachments_docs|default({})).get(it.id) or [] %}
+    {% if item_docs %}
+      <p class="text-secondary"><strong>Documents:</strong></p>
+      <ul>
+        {% for d in item_docs %}
+          <li>{{ d.title or d.filename }}</li>
+        {% endfor %}
+      </ul>
+    {% endif %}
+
+    {% set item_media = (attachments_media.get(it.id) or []) %}
+    {% if item_media %}
+    <div class="mt-2 small">
+        <span class="text-secondary">Audio/Video:</span>
+        <ul class="mt-1 mb-2">
+        {% for m in item_media %}
+            <li>
+            <strong>{{ m.title or ('Media #' ~ m.id) }}</strong>
+            {% set dur = m.duration_seconds or m.duration or None %}
+            {% if dur %}
+                · {{ (dur // 3600)|int }}:{% set mm = (dur % 3600) // 60 %}{{ '%02d' % mm }}:{% set ss = dur % 60 %}{{ '%02d' % ss }}
+            {% endif %}
+            {% if m.uploaded_at %} · {{ m.uploaded_at|localfmt("%Y-%m-%d %H:%M") }}{% endif %}
+            </li>
+        {% endfor %}
+        </ul>
+    </div>
+    {% endif %}
+
+    <hr>
+  {% endfor %}
+</body>
+</html>

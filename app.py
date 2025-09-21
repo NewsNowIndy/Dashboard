@@ -1,7 +1,13 @@
-from flask import Flask, render_template, request, redirect, url_for, send_file, flash, abort, jsonify, send_from_directory
+from flask import Flask, render_template, request, redirect, url_for, send_file, flash, abort, jsonify, send_from_directory, make_response
 from datetime import datetime, date, timedelta
 from zoneinfo import ZoneInfo
+try:
+    from docx import Document  # python-docx
+    HAS_DOCX = True
+except Exception:
+    HAS_DOCX = False
 import io
+from io import BytesIO
 import os
 import re
 import tempfile
@@ -16,14 +22,15 @@ from models import (
     init_db, SessionLocal, engine,
     FoiaRequest, FoiaAttachment, RequestStatus, CourtCase, FoiaEvent, SurroundingCase,
     ProjectDocument, Project, ProjectNote, ProjectStatus,
-    WorkbenchDataset, WorkbenchRecordLink, WorkbenchPdfLink, MediaItem, CaseNotebookEntry, FoiaFollowUp, Tip, CalendarEvent, WebCapture
+    WorkbenchDataset, WorkbenchRecordLink, WorkbenchPdfLink, MediaItem, CaseNotebookEntry, FoiaFollowUp, Tip, CalendarEvent, WebCapture, StoryBoardItem, 
+    StoryBoardItemDoc, Contact,
 )
 from utils import decrypt_file_to_bytes, normalize_request_status, days_until, age_in_days, badge_for_days_left, badge_for_requested_age, send_email
 from sheets_ingest import import_cases_from_csv, import_cases_from_gsheet, import_surrounding_cases_from_csv, import_surrounding_cases_from_gsheet
 from werkzeug.utils import secure_filename
 from werkzeug.exceptions import RequestEntityTooLarge, BadRequest, ClientDisconnected
 from werkzeug.security import generate_password_hash
-from sqlalchemy import func, or_, case, text, desc, event, text
+from sqlalchemy import func, or_, case, text, desc, event, text, bindparam
 from sqlalchemy.engine import Engine
 from pdfminer.high_level import extract_text
 from routes_search import bp_search
@@ -105,6 +112,201 @@ def ensure_webcap_columns(engine):
             if col not in existing:
                 conn.execute(text(f"ALTER TABLE web_captures ADD COLUMN {col} {dtype}"))
 
+def ensure_storyboard_tables(engine):
+    with engine.begin() as conn:
+        conn.execute(text("""
+        CREATE TABLE IF NOT EXISTS storyboard_item (
+          id INTEGER PRIMARY KEY,
+          project_id INTEGER NOT NULL,
+          occurred_at DATETIME DEFAULT (CURRENT_TIMESTAMP),
+          title TEXT NOT NULL,
+          body TEXT,
+          category TEXT,
+          source_url TEXT,
+          tags TEXT,
+          created_by TEXT
+        );
+        """))
+        conn.execute(text("""
+        CREATE TABLE IF NOT EXISTS storyboard_item_docs (
+          item_id INTEGER NOT NULL,
+          doc_id  INTEGER NOT NULL,
+          PRIMARY KEY (item_id, doc_id),
+          UNIQUE (item_id, doc_id)
+        );
+        """))
+        conn.execute(text("""
+        CREATE TABLE IF NOT EXISTS storyboard_item_tips (
+          item_id INTEGER NOT NULL,
+          tip_id  INTEGER NOT NULL,
+          PRIMARY KEY (item_id, tip_id),
+          UNIQUE (item_id, tip_id)
+        );
+        """))
+        conn.execute(text("""
+        CREATE TABLE IF NOT EXISTS storyboard_item_captures (
+          item_id INTEGER NOT NULL,
+          capture_id INTEGER NOT NULL,
+          PRIMARY KEY (item_id, capture_id),
+          UNIQUE (item_id, capture_id)
+        );
+        """))
+
+        conn.execute(text("""
+        CREATE TABLE IF NOT EXISTS storyboard_item_contacts (
+          item_id   INTEGER NOT NULL,
+          contact_id INTEGER NOT NULL,
+          PRIMARY KEY (item_id, contact_id),
+          UNIQUE (item_id, contact_id)
+        );
+        """))
+        conn.execute(text("""
+        CREATE TABLE IF NOT EXISTS storyboard_item_notebook (
+          item_id INTEGER NOT NULL,
+          entry_id INTEGER NOT NULL,
+          PRIMARY KEY (item_id, entry_id),
+          UNIQUE (item_id, entry_id)
+        );
+        """))
+        conn.execute(text("""
+        CREATE TABLE IF NOT EXISTS storyboard_item_media (
+          item_id INTEGER NOT NULL,
+          media_id INTEGER NOT NULL,
+          PRIMARY KEY (item_id, media_id),
+          UNIQUE (item_id, media_id)
+        );
+        """))
+
+def _storyboard_item_docs(db, proj_slug, item_ids):
+    if not item_ids:
+        return {}
+    stmt = text("""
+        SELECT sid.item_id, d.id AS id, d.title, d.filename
+        FROM storyboard_item_docs AS sid
+        JOIN project_documents AS d ON d.id = sid.doc_id
+        WHERE sid.item_id IN :ids
+          AND d.project_slug = :slug
+        ORDER BY d.uploaded_at DESC
+    """).bindparams(bindparam("ids", expanding=True))
+    rows = db.execute(stmt, {"ids": list(item_ids), "slug": proj_slug}).mappings().all()
+    out = {}
+    for r in rows:
+        out.setdefault(r["item_id"], []).append(r)
+    return out
+
+def _storyboard_item_tips(db, project_id, item_ids):
+    if not item_ids:
+        return {}
+    stmt = text("""
+        SELECT sit.item_id, t.id AS id, t.title, t.created_at
+        FROM storyboard_item_tips AS sit
+        JOIN tips AS t ON t.id = sit.tip_id
+        WHERE sit.item_id IN :ids
+          AND t.project_id = :pid
+        ORDER BY t.created_at DESC
+    """).bindparams(bindparam("ids", expanding=True))
+    rows = db.execute(stmt, {"ids": list(item_ids), "pid": project_id}).mappings().all()
+    out = {}
+    for r in rows:
+        out.setdefault(r["item_id"], []).append(r)
+    return out
+
+def _storyboard_item_captures(db, project_id, item_ids):
+    if not item_ids:
+        return {}
+    stmt = text("""
+        SELECT sic.item_id, w.id AS id, w.title, w.captured_at, w.url, w.pdf_path, w.image_path
+        FROM storyboard_item_captures AS sic
+        JOIN web_captures AS w ON w.id = sic.capture_id
+        WHERE sic.item_id IN :ids
+          AND w.project_id = :pid
+        ORDER BY w.captured_at DESC
+    """).bindparams(bindparam("ids", expanding=True))
+    rows = db.execute(stmt, {"ids": list(item_ids), "pid": project_id}).mappings().all()
+    out = {}
+    for r in rows:
+        out.setdefault(r["item_id"], []).append(r)
+    return out
+
+def _storyboard_item_contacts(db, project_id, item_ids):
+    if not item_ids:
+        return {}
+
+    # get allowed contacts for this project via the relationship
+    proj = db.get(Project, project_id)
+    allowed_ids = [c.id for c in getattr(proj, "contacts", [])]
+    if not allowed_ids:
+        return {}
+
+    stmt = text("""
+        SELECT sic.item_id,
+               c.id AS id,
+               c.first_name, c.last_name,
+               c.email, c.phone, c.entity, c.kind
+        FROM storyboard_item_contacts AS sic
+        JOIN contacts AS c ON c.id = sic.contact_id
+        WHERE sic.item_id IN :ids AND c.id IN :allowed
+        ORDER BY c.last_name ASC, c.first_name ASC
+    """).bindparams(bindparam("ids", expanding=True),
+                    bindparam("allowed", expanding=True))
+    rows = db.execute(stmt, {"ids": list(item_ids), "allowed": allowed_ids}).mappings().all()
+    out = {}
+    for r in rows:
+        out.setdefault(r["item_id"], []).append(r)
+    return out
+
+def _storyboard_item_notebook(db, project_id, item_ids):
+    if not item_ids:
+        return {}
+    stmt = text("""
+        SELECT
+            sin.item_id,
+            n.id AS id,
+            n.title,
+            n.body AS details,
+            n.kind AS type,
+            n.created_at AS when_at
+        FROM storyboard_item_notebook AS sin
+        JOIN case_notebook_entries AS n ON n.id = sin.entry_id
+        WHERE sin.item_id IN :ids AND n.project_id = :pid
+        ORDER BY n.created_at DESC
+    """).bindparams(bindparam("ids", expanding=True))
+    rows = db.execute(stmt, {"ids": list(item_ids), "pid": project_id}).mappings().all()
+    out = {}
+    for r in rows:
+        out.setdefault(r["item_id"], []).append(r)
+    return out
+
+def _storyboard_item_media(db, project_id, item_ids):
+    if not item_ids: return {}
+    stmt = text("""
+        SELECT sim.item_id,
+               m.id AS id,
+               m.title, m.duration_seconds, m.created_at AS uploaded_at
+        FROM storyboard_item_media AS sim
+        JOIN media_items AS m ON m.id = sim.media_id
+        WHERE sim.item_id IN :ids AND m.project_id = :pid
+        ORDER BY m.created_at DESC
+    """).bindparams(bindparam("ids", expanding=True))
+    rows = db.execute(stmt, {"ids": list(item_ids), "pid": project_id}).mappings().all()
+    out = {}
+    for r in rows: out.setdefault(r["item_id"], []).append(r)
+    return out
+
+# shared helper
+def _storyboard_attachment_maps(db, project):
+    proj_slug = db.query(Project.slug).filter(Project.id == project.id).scalar()
+    item_ids = [r.id for r in db.query(StoryBoardItem.id)
+                              .filter(StoryBoardItem.project_id == project.id).all()]
+    item_ids = [i for (i,) in item_ids] if item_ids and isinstance(item_ids[0], tuple) else item_ids
+    return (
+        _storyboard_item_docs(db, proj_slug, item_ids),
+        _storyboard_item_tips(db, project.id, item_ids),
+        _storyboard_item_captures(db, project.id, item_ids),
+    )
+
+ensure_storyboard_tables(engine)
+
 app = Flask(__name__)
 app.config.from_object(Config)
 # Flask-Login Setup
@@ -151,6 +353,13 @@ os.makedirs(Config.DATA_DIR, exist_ok=True)
 os.makedirs(Config.PROJECTS_DIR, exist_ok=True)
 os.makedirs(os.path.join(Config.PROJECTS_DIR, "mcpo-plea-deals"), exist_ok=True)
 os.makedirs(Config.WORKBENCH_DIR, exist_ok=True)
+
+USE_SERVER_PDF = False
+try:
+    from weasyprint import HTML  # requires system deps
+    HAS_WEASYPRINT = True
+except Exception:
+    HAS_WEASYPRINT = False
 
 # -----------------------------
 # Helpers
@@ -282,6 +491,18 @@ def localfmt(dt, fmt="%m-%d-%Y %H:%M"):
         # Assume UTC if naive (adjust if you actually store local times)
         dt = dt.replace(tzinfo=UTC)
     return dt.astimezone(LOCAL_TZ).strftime(fmt)
+
+@app.template_filter("enum_value")
+def enum_value(v):
+    """Return Enum.value if present; otherwise the original value."""
+    try:
+        return getattr(v, "value", v)
+    except Exception:
+        return v
+    
+@app.template_filter("norm")
+def norm(s):
+    return (str(s or "").strip())
 
 ALLOWED_EXTS = {".pdf", ".doc", ".docx", ".csv", ".xlsx", ".png", ".jpg", ".jpeg", ".gif"}
 
@@ -2497,6 +2718,536 @@ def entities_rebuild():
                     """), {"e": eid, "d": r["doc_id"], "ts": now})
 
     print("Entities rebuilt.")
+
+STORYBOARD_CATEGORIES = [
+    "Lead", "Tip", "Source Interview", "Document", "Record", "Event",
+    "Timeline", "Court", "Email", "Call", "Web Capture", "Other"
+]
+
+@app.route("/tools/storyboard")
+def tools_storyboard_index():
+    with SessionLocal() as db:
+        projects = db.query(Project).order_by(Project.created_at.desc().nullslast()).all()
+    return render_template("tools_storyboard_index.html", projects=projects)
+
+# --- Project-scoped storyboard (list + create) ---
+@app.route("/projects/<int:project_id>/storyboard", methods=["GET", "POST"])
+def project_storyboard(project_id):
+    with SessionLocal() as db:
+        project = db.get(Project, project_id)
+        if not project:
+            abort(404)
+
+        if request.method == "POST":
+            f = request.form
+            item = StoryBoardItem(
+                project_id=project.id,
+                occurred_at=datetime.fromisoformat(f.get("when")).replace(tzinfo=None) if f.get("when") else datetime.utcnow(),
+                title=f.get("title","").strip() or "Untitled",
+                body=f.get("body","").strip() or None,
+                category=f.get("category","").strip() or None,
+                source_url=f.get("source_url","").strip() or None,
+                tags=f.get("tags","").strip() or None,
+                created_by=f.get("created_by","").strip() or None,
+            )
+            db.add(item)
+            db.commit()
+            return redirect(url_for("project_storyboard", project_id=project.id))
+
+        q = request.args.get("q","").strip()
+        cat = request.args.get("cat","").strip()
+        items = db.query(StoryBoardItem).filter(StoryBoardItem.project_id == project.id)
+        if q:
+            like = f"%{q}%"
+            items = items.filter(
+                (StoryBoardItem.title.ilike(like)) |
+                (StoryBoardItem.body.ilike(like)) |
+                (StoryBoardItem.tags.ilike(like))
+            )
+        if cat:
+            items = items.filter(StoryBoardItem.category == cat)
+        items = items.order_by(StoryBoardItem.occurred_at.asc()).all()
+
+        proj_slug = db.query(Project.slug).filter(Project.id == project.id).scalar()
+        item_ids = [it.id for it in items]
+        attachments_docs = _storyboard_item_docs(db, proj_slug, item_ids)
+        attachments_tips = _storyboard_item_tips(db, project.id, item_ids)
+        attachments_caps = _storyboard_item_captures(db, project.id, item_ids)
+        attachments_contacts = _storyboard_item_contacts(db, project.id, item_ids)
+        attachments_notebook = _storyboard_item_notebook(db, project.id, item_ids)
+        attachments_media    = _storyboard_item_media(db, project.id, item_ids)
+
+        project_docs = (
+            db.query(ProjectDocument)
+            .filter(ProjectDocument.project_slug == proj_slug)
+            .order_by(ProjectDocument.uploaded_at.desc())
+            .all()
+        )
+        project_tips = (
+            db.query(Tip)
+            .filter(Tip.project_id == project.id)
+            .order_by(Tip.created_at.desc())
+            .all()
+        )
+        project_caps = (
+            db.query(WebCapture)
+            .filter(WebCapture.project_id == project.id)
+            .order_by(WebCapture.captured_at.desc())
+            .all()
+        )
+
+        project_contacts = sorted(
+            getattr(project, "contacts", []),
+            key=lambda c: ((c.last_name or "").lower(), (c.first_name or "").lower())
+        )
+
+        project_notebook = (
+            db.query(CaseNotebookEntry)
+            .filter(CaseNotebookEntry.project_id == project.id)
+            .order_by(CaseNotebookEntry.created_at.desc())
+            .all()
+        )
+        project_media = (
+            db.query(MediaItem)
+            .filter(MediaItem.project_id == project.id)
+            .order_by(MediaItem.created_at.desc())
+            .all()
+        )
+        
+        return render_template(
+            "storyboard.html",
+            project=project, items=items, q=q, cat=cat, categories=STORYBOARD_CATEGORIES,
+            attachments_map=attachments_docs,         # keep old name for docs
+            attachments_tips=attachments_tips,
+            attachments_caps=attachments_caps,
+            attachments_docs=attachments_docs,
+            attachments_contacts=attachments_contacts,
+            attachments_notebook=attachments_notebook,
+            attachments_media=attachments_media,
+            project_docs=project_docs,
+            project_tips=project_tips,
+            project_caps=project_caps,
+            project_contacts=project_contacts,
+            project_notebook=project_notebook,
+            project_media=project_media,
+        )
+
+# --- Edit item ---
+@app.route("/storyboard/<int:item_id>/edit", methods=["POST"])
+def storyboard_edit(item_id):
+    with SessionLocal() as db:
+        item = db.get(StoryBoardItem, item_id)
+        if not item:
+            abort(404)
+        f = request.form
+        if f.get("when"):
+            item.occurred_at = datetime.fromisoformat(f["when"]).replace(tzinfo=None)
+        item.title = f.get("title", item.title).strip() or item.title
+        item.body = f.get("body","").strip() or None
+        item.category = f.get("category","").strip() or None
+        item.source_url = f.get("source_url","").strip() or None
+        item.tags = f.get("tags","").strip() or None
+        item.created_by = f.get("created_by","").strip() or None
+        db.commit()
+        return redirect(url_for("project_storyboard", project_id=item.project_id))
+
+# --- Delete item ---
+@app.route("/storyboard/<int:item_id>/delete", methods=["POST"])
+def storyboard_delete(item_id):
+    with SessionLocal() as db:
+        item = db.get(StoryBoardItem, item_id)
+        if not item:
+            abort(404)
+        pid = item.project_id
+        db.delete(item)
+        db.commit()
+        return redirect(url_for("project_storyboard", project_id=pid))
+
+# --- Export: DOCX (best for editing & Google Docs import) ---
+@app.route("/projects/<int:project_id>/storyboard/export.docx")
+@login_required
+def storyboard_export_docx(project_id):
+    if not HAS_DOCX:
+        abort(500, description="python-docx not installed.")
+
+    tz = ZoneInfo("America/Indiana/Indianapolis")
+    with SessionLocal() as db:
+        project = db.get(Project, project_id)
+        if not project:
+            abort(404)
+
+        items = (db.query(StoryBoardItem)
+                   .filter_by(project_id=project.id)
+                   .order_by(StoryBoardItem.occurred_at.asc())
+                   .all())
+
+        attachments_docs, attachments_tips, attachments_caps = _storyboard_attachment_maps(db, project)
+
+    doc = Document()
+    doc.add_heading(f"Story Board — {project.name or f'Project {project.id}'}", 0)
+
+    for it in items:
+        when_utc = it.occurred_at
+        if when_utc.tzinfo is None:
+            when_utc = when_utc.replace(tzinfo=ZoneInfo("UTC"))
+        when_local = when_utc.astimezone(tz)
+
+        h = doc.add_heading(level=2)
+        h.add_run(when_local.strftime("%Y-%m-%d %H:%M")).bold = True
+        if it.category:
+            h.add_run(f"  [{it.category}]").italic = True
+
+        doc.add_paragraph(it.title or "Untitled")
+        if it.body:
+            doc.add_paragraph(it.body)
+
+        # meta
+        meta = []
+        if it.tags: meta.append(f"Tags: {it.tags}")
+        if it.source_url: meta.append(f"Source: {it.source_url}")
+        if it.created_by: meta.append(f"By: {it.created_by}")
+        if meta:
+            doc.add_paragraph(" · ".join(meta))
+
+        # attachments
+        for t in (attachments_tips.get(it.id) or []):
+            doc.add_paragraph(f"Tip: {t.get('title') or 'Tip #' + str(t['id'])}", style=None)
+        for w in (attachments_caps.get(it.id) or []):
+            label = w.get("title") or f"Capture #{w['id']}"
+            if w.get("url"):
+                doc.add_paragraph(f"Web Capture: {label} — {w['url']}")
+            else:
+                doc.add_paragraph(f"Web Capture: {label}")
+        for d in (attachments_docs.get(it.id) or []):
+            doc.add_paragraph(f"Document: {d.get('title') or d.get('filename') or ('Doc #' + str(d['id']))}")
+
+    safe_name = re.sub(r"[\\/]+", " - ", project.name or f"Project {project.id}")
+    bio = BytesIO()
+    doc.save(bio); bio.seek(0)
+    return send_file(bio,
+        as_attachment=True,
+        download_name=f"Story Board - {safe_name}.docx",
+        mimetype="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
+
+# --- Export: PDF ---
+# Default path: render a print-optimized HTML; the user uses the browser's "Save as PDF"
+@app.route("/projects/<int:project_id>/storyboard/print")
+@login_required
+def storyboard_print(project_id):
+    with SessionLocal() as db:
+        project = db.get(Project, project_id) or abort(404)
+        items = (db.query(StoryBoardItem)
+                   .filter_by(project_id=project.id)
+                   .order_by(StoryBoardItem.occurred_at.asc())
+                   .all())
+
+        # same helpers you use on the main storyboard page
+        proj_slug = db.query(Project.slug).filter(Project.id == project.id).scalar()
+        item_ids = [it.id for it in items]
+        attachments_docs = _storyboard_item_docs(db, proj_slug, item_ids)
+        attachments_tips = _storyboard_item_tips(db, project.id, item_ids)
+        attachments_caps = _storyboard_item_captures(db, project.id, item_ids)
+        attachments_contacts  = _storyboard_item_contacts(db, project.id, item_ids)
+        attachments_notebook  = _storyboard_item_notebook(db, project.id, item_ids)
+        attachments_media     = _storyboard_item_media(db, project.id, item_ids)
+
+    return render_template(
+        "storyboard_print.html",
+        project=project,
+        items=items,
+        attachments_docs=attachments_docs,
+        attachments_tips=attachments_tips,
+        attachments_caps=attachments_caps,
+        attachments_contacts=attachments_contacts,
+        attachments_notebook=attachments_notebook,
+        attachments_media=attachments_media,
+    )
+
+# Optional server-side PDF if you enable WeasyPrint or wkhtmltopdf
+@app.get("/projects/<int:project_id>/storyboard/export.pdf")
+@login_required
+def storyboard_export_pdf(project_id: int):
+    db = SessionLocal()
+    try:
+        project = db.get(Project, project_id) or abort(404)
+        items = (db.query(StoryBoardItem)
+                   .filter(StoryBoardItem.project_id == project.id)
+                   .order_by(StoryBoardItem.occurred_at.asc())
+                   .all())
+
+        proj_slug = db.query(Project.slug).filter(Project.id == project.id).scalar()
+        item_ids = [it.id for it in items]
+        attachments_docs = _storyboard_item_docs(db, proj_slug, item_ids)
+        attachments_tips = _storyboard_item_tips(db, project.id, item_ids)
+        attachments_caps = _storyboard_item_captures(db, project.id, item_ids)
+        attachments_contacts  = _storyboard_item_contacts(db, project.id, item_ids)
+        attachments_notebook  = _storyboard_item_notebook(db, project.id, item_ids)
+        attachments_media     = _storyboard_item_media(db, project.id, item_ids)
+
+        html = render_template(
+            "storyboard_print.html",
+            project=project, items=items,
+            attachments_docs=attachments_docs,
+            attachments_tips=attachments_tips,
+            attachments_caps=attachments_caps,
+            attachments_contacts=attachments_contacts,
+            attachments_notebook=attachments_notebook,
+            attachments_media=attachments_media,
+        )
+
+        # Generate PDF, then return bytes
+        with tempfile.TemporaryDirectory() as tmp:
+            html_path = os.path.join(tmp, "storyboard.html")
+            pdf_path  = os.path.join(tmp, "out.pdf")
+            with open(html_path, "w", encoding="utf-8") as f:
+                f.write(html)
+
+            subprocess.check_call([
+                "wkhtmltopdf",
+                "--enable-local-file-access",
+                "--print-media-type",
+                "--page-size", "Letter",
+                "--margin-top", "12mm",
+                "--margin-right", "12mm",
+                "--margin-bottom", "12mm",
+                "--margin-left", "12mm",
+                "--viewport-size", "1280x800",
+                html_path, pdf_path
+            ])
+            with open(pdf_path, "rb") as fh:
+                data = fh.read()
+
+        safe_name = re.sub(r"[\\/]+", " - ", project.name or f"Project {project.id}")
+        return send_file(io.BytesIO(data), mimetype="application/pdf",
+                         as_attachment=True,
+                         download_name=f"Story Board - {safe_name}.pdf")
+    finally:
+        db.close()
+
+@app.post("/storyboard/<int:item_id>/attach")
+@login_required
+def storyboard_attach_doc(item_id: int):
+    kind = (request.form.get("kind") or "").strip().lower()  # 'doc' | 'tip' | 'capture'
+    obj_id_s = (request.form.get("obj_id") or "").strip()
+    allowed = {"doc","tip","capture","contact","note","media"}
+    if kind not in allowed or not obj_id_s.isdigit():
+        flash("Invalid attach request.", "warning")
+        return redirect(request.referrer or url_for("dashboard"))
+    obj_id = int(obj_id_s)
+
+    db = SessionLocal()
+    try:
+        item = db.get(StoryBoardItem, item_id)
+        if not item:
+            abort(404)
+
+        # Verify target belongs to the same project
+        proj_slug = db.query(Project.slug).filter(Project.id == item.project_id).scalar()
+
+        if kind == "doc":
+            d = db.get(ProjectDocument, obj_id)
+            if not d or d.project_slug != proj_slug:
+                flash("Document not found in this project.", "warning")
+            else:
+                db.execute(text("INSERT OR IGNORE INTO storyboard_item_docs (item_id, doc_id) VALUES (:i,:d)"),
+                           {"i": item.id, "d": d.id})
+                db.commit()
+                flash("Document attached.", "success")
+
+        elif kind == "tip":
+            t = db.get(Tip, obj_id)
+            if not t or t.project_id != item.project_id:
+                flash("Tip not found in this project.", "warning")
+            else:
+                db.execute(text("INSERT OR IGNORE INTO storyboard_item_tips (item_id, tip_id) VALUES (:i,:t)"),
+                           {"i": item.id, "t": t.id})
+                db.commit()
+                flash("Tip attached.", "success")
+        
+        elif kind == "contact":
+            c = db.get(Contact, obj_id)
+            proj = db.get(Project, item.project_id)
+            allowed = {ct.id for ct in getattr(proj, "contacts", [])}
+            if not c or c.id not in allowed:
+                flash("Contact not found in this project.", "warning")
+            else:
+                db.execute(text("""
+                    INSERT OR IGNORE INTO storyboard_item_contacts (item_id, contact_id)
+                    VALUES (:i, :c)
+                """), {"i": item.id, "c": c.id})
+                db.commit()
+                flash("Contact attached.", "success")
+
+        elif kind == "note":
+            n = db.get(CaseNotebookEntry, obj_id)
+            if not n or n.project_id != item.project_id:
+                flash("Notebook entry not found in this project.", "warning")
+            else:
+                db.execute(text("INSERT OR IGNORE INTO storyboard_item_notebook (item_id, entry_id) VALUES (:i,:n)"),
+                        {"i": item.id, "n": n.id})
+                db.commit()
+                flash("Notebook entry attached.", "success")
+
+        elif kind == "media":
+            m = db.get(MediaItem, obj_id)
+            if not m or m.project_id != item.project_id:
+                flash("Media item not found in this project.", "warning")
+            else:
+                db.execute(text("INSERT OR IGNORE INTO storyboard_item_media (item_id, media_id) VALUES (:i,:m)"),
+                        {"i": item.id, "m": m.id})
+                db.commit()
+                flash("Media attached.", "success")
+
+        else:  # capture
+            w = db.get(WebCapture, obj_id)
+            if not w or w.project_id != item.project_id:
+                flash("Web capture not found in this project.", "warning")
+            else:
+                db.execute(text("INSERT OR IGNORE INTO storyboard_item_captures (item_id, capture_id) VALUES (:i,:c)"),
+                           {"i": item.id, "c": w.id})
+                db.commit()
+                flash("Web capture attached.", "success")
+
+        return redirect(url_for("project_storyboard", project_id=item.project_id))
+    finally:
+        db.close()
+
+@app.post("/storyboard/<int:item_id>/detach")
+@login_required
+def storyboard_detach_doc(item_id: int):
+    kind = (request.form.get("kind") or "").strip().lower()
+    obj_id_s = (request.form.get("obj_id") or "").strip()
+    allowed = {"doc","tip","capture","contact","note","media"}
+    if kind not in allowed or not obj_id_s.isdigit():
+        flash("Invalid detach request.", "warning")
+        return redirect(request.referrer or url_for("dashboard"))
+    obj_id = int(obj_id_s)
+
+    db = SessionLocal()
+    try:
+        item = db.get(StoryBoardItem, item_id)
+        if not item:
+            abort(404)
+
+        if kind == "doc":
+            db.execute(text("DELETE FROM storyboard_item_docs WHERE item_id=:i AND doc_id=:d"),
+                       {"i": item.id, "d": obj_id})
+        elif kind == "tip":
+            db.execute(text("DELETE FROM storyboard_item_tips WHERE item_id=:i AND tip_id=:t"),
+                       {"i": item.id, "t": obj_id})
+        elif kind == "contact":
+            db.execute(text("DELETE FROM storyboard_item_contacts WHERE item_id=:i AND contact_id=:c"),
+                    {"i": item.id, "c": obj_id})
+        elif kind == "note":
+            db.execute(text("DELETE FROM storyboard_item_notebook WHERE item_id=:i AND entry_id=:n"),
+                    {"i": item.id, "n": obj_id})
+        elif kind == "media":
+            db.execute(text("DELETE FROM storyboard_item_media WHERE item_id=:i AND media_id=:m"),
+                    {"i": item.id, "m": obj_id})
+        else:
+            db.execute(text("DELETE FROM storyboard_item_captures WHERE item_id=:i AND capture_id=:c"),
+                       {"i": item.id, "c": obj_id})
+        db.commit()
+        flash("Attachment removed.", "success")
+        return redirect(url_for("project_storyboard", project_id=item.project_id))
+    finally:
+        db.close()
+
+@app.post("/storyboard/quick_add")
+@login_required
+def storyboard_quick_add():
+    kind = (request.form.get("kind") or "").strip().lower()  # doc|tip|capture
+    obj_id_s = (request.form.get("obj_id") or "").strip()
+    allowed = {"doc","tip","capture","contact","note","media"}
+    if kind not in allowed or not obj_id_s.isdigit():
+        abort(400)
+    obj_id = int(obj_id_s)
+
+    db = SessionLocal()
+    try:
+        project_id = None
+        title = None
+        body = None
+        source_url = None
+
+        if kind == "doc":
+            d = db.get(ProjectDocument, obj_id)
+            if not d: abort(404)
+            project_id = db.query(Project.id).filter(Project.slug == d.project_slug).scalar()
+            title = d.title or d.filename
+        elif kind == "tip":
+            t = db.get(Tip, obj_id)
+            if not t: abort(404)
+            project_id = t.project_id
+            title = t.title or f"Tip #{t.id}"
+            body = (
+                getattr(t, "body", None)
+                or getattr(t, "notes", None)
+                or getattr(t, "content", None)
+                or getattr(t, "text", None)
+                or None
+            )
+        elif kind == "contact":
+            c = db.get(Contact, obj_id) or abort(404)
+            # Prefer explicit project_id from the request (add it to your “Board” button URL)
+            project_id = request.args.get("project_id", type=int)
+
+            if not project_id:
+                # fall back to the first associated project (if your Contact has a .projects rel)
+                proj = db.query(Project)\
+                        .join(Project.contacts)\
+                        .filter(Contact.id == c.id)\
+                        .first()
+                project_id = proj.id if proj else None
+
+            if not project_id:
+                abort(400)  # no way to know which project to board this into
+
+            title = f"{(c.first_name or '').strip()} {(c.last_name or '').strip()}".strip() or f"Contact #{c.id}"
+        elif kind == "note":
+            n = db.get(CaseNotebookEntry, obj_id) or abort(404)
+            project_id = n.project_id
+            title = n.title or f"Notebook #{n.id}"
+            body = getattr(n, "body", None) or getattr(n, "details", None)
+        elif kind == "media":
+            m = db.get(MediaItem, obj_id) or abort(404)
+            project_id = m.project_id
+            title = m.title or f"Media #{m.id}"
+        else:
+            w = db.get(WebCapture, obj_id)
+            if not w: abort(404)
+            project_id = w.project_id
+            title = w.title or f"Capture #{w.id}"
+            source_url = getattr(w, "url", None)
+
+        if not project_id: abort(400)
+
+        it = StoryBoardItem(
+            project_id=project_id,
+            occurred_at=datetime.utcnow(),
+            title=title or "New item",
+            body=body,
+            source_url=source_url
+        )
+        db.add(it)
+        db.flush()
+
+        # attach
+        if kind == "doc":
+            db.execute(text("INSERT OR IGNORE INTO storyboard_item_docs (item_id, doc_id) VALUES (:i,:d)"),
+                       {"i": it.id, "d": obj_id})
+        elif kind == "tip":
+            db.execute(text("INSERT OR IGNORE INTO storyboard_item_tips (item_id, tip_id) VALUES (:i,:t)"),
+                       {"i": it.id, "t": obj_id})
+        else:
+            db.execute(text("INSERT OR IGNORE INTO storyboard_item_captures (item_id, capture_id) VALUES (:i,:c)"),
+                       {"i": it.id, "c": obj_id})
+
+        db.commit()
+        flash("Added to Story Board.", "success")
+        return redirect(url_for("project_storyboard", project_id=project_id))
+    finally:
+        db.close()
 
 # -----------------------------
 # Entrypoint
