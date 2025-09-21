@@ -2904,17 +2904,38 @@ def storyboard_export_docx(project_id):
         abort(500, description="python-docx not installed.")
 
     tz = ZoneInfo("America/Indiana/Indianapolis")
+
+    # tiny helper since Jinja's hms filter isn't available here
+    def _hms(seconds):
+        try:
+            s = int(float(seconds or 0))
+        except Exception:
+            return ""
+        h = s // 3600
+        m = (s % 3600) // 60
+        sec = s % 60
+        return f"{h}:{m:02d}:{sec:02d}" if h else f"{m}:{sec:02d}"
+
     with SessionLocal() as db:
         project = db.get(Project, project_id)
         if not project:
             abort(404)
 
-        items = (db.query(StoryBoardItem)
-                   .filter_by(project_id=project.id)
-                   .order_by(StoryBoardItem.occurred_at.asc())
-                   .all())
+        items = (
+            db.query(StoryBoardItem)
+              .filter_by(project_id=project.id)
+              .order_by(StoryBoardItem.occurred_at.asc())
+              .all()
+        )
 
-        attachments_docs, attachments_tips, attachments_caps = _storyboard_attachment_maps(db, project)
+        # Build all the attachment maps we need (docs/tips/captures/media)
+        proj_slug = db.query(Project.slug).filter(Project.id == project.id).scalar()
+        item_ids = [it.id for it in items]
+
+        attachments_docs     = _storyboard_item_docs(db, proj_slug, item_ids)
+        attachments_tips     = _storyboard_item_tips(db, project.id, item_ids)
+        attachments_caps     = _storyboard_item_captures(db, project.id, item_ids)
+        attachments_media    = _storyboard_item_media(db, project.id, item_ids)  # <-- add media
 
     doc = Document()
     doc.add_heading(f"Story Board — {project.name or f'Project {project.id}'}", 0)
@@ -2942,9 +2963,9 @@ def storyboard_export_docx(project_id):
         if meta:
             doc.add_paragraph(" · ".join(meta))
 
-        # attachments
+        # attachments: tips / captures / docs
         for t in (attachments_tips.get(it.id) or []):
-            doc.add_paragraph(f"Tip: {t.get('title') or 'Tip #' + str(t['id'])}", style=None)
+            doc.add_paragraph(f"Tip: {t.get('title') or 'Tip #' + str(t['id'])}")
         for w in (attachments_caps.get(it.id) or []):
             label = w.get("title") or f"Capture #{w['id']}"
             if w.get("url"):
@@ -2954,13 +2975,29 @@ def storyboard_export_docx(project_id):
         for d in (attachments_docs.get(it.id) or []):
             doc.add_paragraph(f"Document: {d.get('title') or d.get('filename') or ('Doc #' + str(d['id']))}")
 
+        # --- NEW: media + transcript (mirrors PDF content) ---
+        for m in (attachments_media.get(it.id) or []):
+            title = m.get("title") or f"Media #{m.get('id')}"
+            dur = _hms(m.get("duration_seconds"))
+            head = f"Media: {title}" + (f" — {dur}" if dur else "")
+            doc.add_paragraph(head)
+
+            tx = (m.get("transcript_text") or "").strip()
+            if tx:
+                # label then full transcript
+                doc.add_paragraph("Transcript:")
+                doc.add_paragraph(tx)
+
     safe_name = re.sub(r"[\\/]+", " - ", project.name or f"Project {project.id}")
     bio = BytesIO()
-    doc.save(bio); bio.seek(0)
-    return send_file(bio,
+    doc.save(bio)
+    bio.seek(0)
+    return send_file(
+        bio,
         as_attachment=True,
         download_name=f"Story Board - {safe_name}.docx",
-        mimetype="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
+        mimetype="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    )
 
 # --- Export: PDF ---
 # Default path: render a print-optimized HTML; the user uses the browser's "Save as PDF"
