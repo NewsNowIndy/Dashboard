@@ -7,7 +7,7 @@
   <div class="row g-3">
     {% for p in projects %}
       {# Safely unwrap enum -> string and normalize #}
-      {% set s = (p.status | enum_value | norm) %}
+      {% set s = ((p.status.value if p.status is not none and (p.status.value is defined) else p.status) | string | trim) %}
 
       {# Pick a Bootstrap badge color #}
       {% if s == 'Active' %}

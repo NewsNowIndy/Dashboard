@@ -106,6 +106,9 @@
                 · {{ (dur // 3600)|int }}:{% set mm = (dur % 3600) // 60 %}{{ '%02d' % mm }}:{% set ss = dur % 60 %}{{ '%02d' % ss }}
             {% endif %}
             {% if m.uploaded_at %} · {{ m.uploaded_at|localfmt("%Y-%m-%d %H:%M") }}{% endif %}
+            {% if m.transcript_text %}
+                <div class="mt-1" style="white-space: pre-wrap;">{{ m.transcript_text }}</div>
+            {% endif %}
             </li>
         {% endfor %}
         </ul>
