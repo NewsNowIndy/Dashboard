@@ -1,0 +1,48 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="container py-4">
+  <h1 class="mb-3">Story Board</h1>
+  <p class="text-muted">Pick a project to view its timeline.</p>
+
+  <div class="row g-3">
+    {% for p in projects %}
+      {# Safely unwrap enum -> string and normalize #}
+      {% set s = (p.status | enum_value | norm) %}
+
+      {# Pick a Bootstrap badge color #}
+      {% if s == 'Active' %}
+        {% set badge_cls = 'text-bg-success' %}
+      {% elif s == 'Planned' %}
+        {% set badge_cls = 'text-bg-warning' %}
+      {% elif s == 'Completed' %}
+        {% set badge_cls = 'text-bg-secondary' %}
+      {% else %}
+        {% set badge_cls = 'text-bg-dark' %}
+      {% endif %}
+
+      <div class="col-12 col-md-6 col-lg-4">
+        <a class="card text-decoration-none h-100 bg-dark border border-secondary"
+           href="{{ url_for('project_storyboard', project_id=p.id) }}">
+          <div class="card-body">
+            <div class="d-flex justify-content-between align-items-start">
+              <h5 class="card-title text-light mb-1">
+                {{ p.title or p.name or ("Project " ~ p.id) }}
+              </h5>
+              <span class="badge {{ badge_cls }}">{{ s or "Unknown" }}</span>
+            </div>
+            {% if p.description %}
+              <p class="card-text text-secondary mt-2">
+                {{ p.description[:160] }}{% if p.description|length>160 %}…{% endif %}
+              </p>
+            {% endif %}
+          </div>
+        </a>
+      </div>
+    {% else %}
+      <div class="col-12">
+        <div class="alert alert-warning">No projects found.</div>
+      </div>
+    {% endfor %}
+  </div>
+</div>
+{% endblock %}

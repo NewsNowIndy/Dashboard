@@ -70,6 +70,11 @@
               </div>
               <a class="btn btn-sm btn-outline-info"
                   href="{{ url_for('mail.compose') }}?project_id={{ project.id }}">Email</a>
+              <form class="d-inline" method="post" action="{{ url_for('storyboard_quick_add') }}">
+                <input type="hidden" name="kind" value="contact">  {# or note / media #}
+                <input type="hidden" name="obj_id" value="{{ c.id }}"> {# or n.id / m.id #}
+                <button class="btn btn-sm btn-outline-primary">Board</button>
+              </form>
             </div>
           </li>
         {% endfor %}
@@ -152,6 +157,11 @@
               <td class="d-none d-md-table-cell">{{ t.status or '—' }}</td>
               <td class="text-end">
                 <a class="btn btn-sm btn-outline-info" href="{{ url_for('tips.detail', tip_id=(t.glk_id or t.id)) }}">Open</a>
+                <form method="post" action="{{ url_for('storyboard_quick_add') }}" class="d-inline">
+                  <input type="hidden" name="kind" value="tip">  <!-- or tip / capture -->
+                  <input type="hidden" name="obj_id" value="{{ t.id }}">
+                  <button class="btn btn-sm btn-outline-light">Board</button>
+                </form>
               </td>
             </tr>
           {% endfor %}
@@ -197,6 +207,11 @@
             </form>
             <form method="post" action="{{ url_for('notebook.delete', entry_id=n.id) }}" class="d-inline" onsubmit="return confirm('Delete?')">
               <button class="btn btn-sm btn-outline-danger">Delete</button>
+            </form>
+            <form class="d-inline" method="post" action="{{ url_for('storyboard_quick_add') }}">
+              <input type="hidden" name="kind" value="note">  {# or note / media #}
+              <input type="hidden" name="obj_id" value="{{ n.id }}"> {# or n.id / m.id #}
+              <button class="btn btn-sm btn-outline-primary">Board</button>
             </form>
           </td>
         </tr>
@@ -262,6 +277,11 @@
                       onsubmit="return confirm('Delete this document? This cannot be undone.');">
                   <button class="btn btn-sm btn-outline-danger">Delete</button>
                 </form>
+                <form method="post" action="{{ url_for('storyboard_quick_add') }}" class="d-inline">
+                  <input type="hidden" name="kind" value="doc">  <!-- or tip / capture -->
+                  <input type="hidden" name="obj_id" value="{{ d.id }}">
+                  <button class="btn btn-sm btn-outline-light">Board</button>
+                </form>
               </td>
             </tr>
           {% endfor %}
@@ -313,6 +333,11 @@
                     class="d-inline"
                     onsubmit="return confirm('Delete this media? This cannot be undone.');">
                 <button class="btn btn-sm btn-outline-danger">Delete</button>
+              </form>
+              <form class="d-inline" method="post" action="{{ url_for('storyboard_quick_add') }}">
+                <input type="hidden" name="kind" value="media">  {# or note / media #}
+                <input type="hidden" name="obj_id" value="{{ m.id }}"> {# or n.id / m.id #}
+                <button class="btn btn-sm btn-outline-primary">Board</button>
               </form>
             </td>
           </tr>

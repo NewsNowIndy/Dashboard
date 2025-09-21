@@ -1,0 +1,419 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="container py-4">
+
+  <!-- Header -->
+  <div class="d-flex justify-content-between align-items-center mb-3">
+    <h1 class="m-0">Story Board — {{ project.title or project.name or ("Project " ~ project.id) }}</h1>
+    <div class="btn-group">
+      <a class="btn btn-outline-light" href="{{ url_for('storyboard_print', project_id=project.id) }}" target="_blank">Print / Save as PDF</a>
+      <a class="btn btn-outline-light" href="{{ url_for('storyboard_export_pdf', project_id=project.id) }}">Export PDF (server)</a>
+      <a class="btn btn-outline-light" href="{{ url_for('storyboard_export_docx', project_id=project.id) }}">Export .DOCX</a>
+      <a class="btn btn-secondary" href="{{ url_for('tools_storyboard_index') }}">Switch Project</a>
+    </div>
+  </div>
+
+  <!-- Category presets (datalist) -->
+  <datalist id="sb-categories">
+    {% for c in categories or [] %}
+      <option value="{{ c }}">
+    {% endfor %}
+  </datalist>
+
+  <!-- Filters / Add -->
+  <form class="row g-2 mb-4" method="get">
+    <div class="col-md">
+      <input class="form-control" name="q" value="{{ q }}" placeholder="Search title, body, tags…">
+    </div>
+    <div class="col-md-3">
+      <input class="form-control" name="cat" value="{{ cat }}" list="sb-categories" placeholder="Category (e.g., Document, Tip)…">
+    </div>
+    <div class="col-auto">
+      <button class="btn btn-outline-light">Filter</button>
+    </div>
+    <div class="col-auto ms-auto">
+      <button class="btn btn-success" type="button" data-bs-toggle="modal" data-bs-target="#addItemModal">+ Add Item</button>
+    </div>
+  </form>
+
+  <!-- Timeline list -->
+  <ul class="list-group">
+    {% for it in items %}
+      <li class="list-group-item bg-dark border-secondary text-light">
+        <div class="d-flex justify-content-between">
+          <div>
+            <div class="small text-secondary">{{ it.occurred_at|localfmt("%Y-%m-%d %H:%M") }}</div>
+            <div class="fw-bold">
+              {{ it.title }}
+              {% if it.category %}
+                <span class="badge text-bg-secondary ms-2">{{ it.category }}</span>
+              {% endif %}
+            </div>
+            {% if it.body %}
+              <div class="mt-1">{{ it.body|urlize }}</div>
+            {% endif %}
+
+            <!-- Meta line -->
+            <div class="small text-muted mt-1">
+              {% if it.tags %}Tags: {{ it.tags }} · {% endif %}
+              {% if it.source_url %}<a class="link-secondary" href="{{ it.source_url }}" target="_blank" rel="noopener">source</a> · {% endif %}
+              {% if it.created_by %}By {{ it.created_by }}{% endif %}
+            </div>
+
+            <!-- Attachments (if any) -->
+            {% set item_contacts = (attachments_contacts.get(it.id) or []) %}
+            {% if item_contacts %}
+              <div class="mt-2 small">
+                <span class="text-secondary">Sources/Contacts:</span>
+                <ul class="mt-1 mb-2">
+                  {% for c in item_contacts %}
+                    <li>
+                      <strong>{{ (c.first_name or '') ~ ' ' ~ (c.last_name or '') | trim }}</strong>
+                      — {{ (c.kind or '')|string }}
+                      {% if c.email %} · <a class="link-light" href="mailto:{{ c.email }}">{{ c.email }}</a>{% endif %}
+                      {% if c.phone %} · {{ c.phone }}{% endif %}
+                      {% if c.entity %} · {{ c.entity }}{% endif %}
+                      <form class="d-inline" method="post" action="{{ url_for('storyboard_detach_doc', item_id=it.id) }}">
+                        <input type="hidden" name="kind" value="contact">
+                        <input type="hidden" name="obj_id" value="{{ c.id }}">
+                        <button class="btn btn-sm btn-outline-danger">Remove</button>
+                      </form>
+                    </li>
+                  {% endfor %}
+                </ul>
+              </div>
+            {% endif %}
+
+            <div class="mt-2">
+                <form class="d-flex gap-2 align-items-center" method="post"
+                      action="{{ url_for('storyboard_attach_doc', item_id=it.id) }}">
+                  <input type="hidden" name="kind" value="contact">
+                  <select class="form-select form-select-sm bg-dark text-light border-secondary" name="obj_id" required>
+                    <option value="">Attach a source/contact…</option>
+                    {% for c in project_contacts %}
+                      <option value="{{ c.id }}">
+                        {{ (c.first_name or '') ~ ' ' ~ (c.last_name or '') | trim }}{% if c.kind %} ({{ c.kind|contact_type }}){% endif %}
+                      </option>
+                    {% endfor %}
+                  </select>
+                  <button class="btn btn-sm btn-outline-light">Attach</button>
+                </form>
+            </div>
+
+            {% set item_notes = (attachments_notebook.get(it.id) or []) %}
+            {% if item_notes %}
+            <div class="mt-2 small">
+                <span class="text-secondary">Notebook:</span>
+                <ul class="mt-1 mb-2">
+                {% for n in item_notes %}
+                    <li>
+                    <strong>{{ n.type or 'Note' }}</strong> — {{ n.title or ('Entry #' ~ n.id) }}
+                    {% if n.details %}<div class="text-muted">{{ n.details }}</div>{% endif %}
+                    {% if n.when_at %}<div class="text-muted">{{ n.when_at|localfmt("%Y-%m-%d %H:%M") }}</div>{% endif %}
+                    <form class="d-inline" method="post" action="{{ url_for('storyboard_detach_doc', item_id=it.id) }}">
+                        <input type="hidden" name="kind" value="note">
+                        <input type="hidden" name="obj_id" value="{{ n.id }}">
+                        <button class="btn btn-sm btn-outline-danger">Remove</button>
+                    </form>
+                    </li>
+                {% endfor %}
+                </ul>
+            </div>
+            {% endif %}
+
+            <div class="mt-2">
+                <form class="d-flex gap-2 align-items-center" method="post"
+                      action="{{ url_for('storyboard_attach_doc', item_id=it.id) }}">
+                  <input type="hidden" name="kind" value="note">
+                  <select class="form-select form-select-sm bg-dark text-light border-secondary" name="obj_id" required>
+                    <option value="">Attach a notebook entry…</option>
+                    {% for n in project_notebook %}
+                      <option value="{{ n.id }}">{{ n.title or ('Entry #' ~ n.id) }}</option>
+                    {% endfor %}
+                  </select>
+                  <button class="btn btn-sm btn-outline-light">Attach</button>
+                </form>
+            </div>
+
+            {% set item_media = (attachments_media.get(it.id) or []) %}
+            {% if item_media %}
+            <div class="mt-2 small">
+                <span class="text-secondary">Audio/Video:</span>
+                <ul class="mt-1 mb-2">
+                {% for m in item_media %}
+                    <li>
+                    <strong>{{ m.title or ('Media #' ~ m.id) }}</strong>
+                    {% set dur = m.duration_seconds or m.duration or None %}
+                    {% if dur %}
+                        · {{ (dur // 3600)|int }}:{% set mm = (dur % 3600) // 60 %}{{ '%02d' % mm }}:{% set ss = dur % 60 %}{{ '%02d' % ss }}
+                    {% endif %}
+                    {% if m.uploaded_at %} · {{ m.uploaded_at|localfmt("%Y-%m-%d %H:%M") }}{% endif %}
+                    <form class="d-inline" method="post" action="{{ url_for('storyboard_detach_doc', item_id=it.id) }}">
+                        <input type="hidden" name="kind" value="media">
+                        <input type="hidden" name="obj_id" value="{{ m.id }}">
+                        <button class="btn btn-sm btn-outline-danger">Remove</button>
+                    </form>
+                    </li>
+                {% endfor %}
+                </ul>
+            </div>
+            {% endif %}
+
+            <div class="mt-2">
+                <form class="d-flex gap-2 align-items-center" method="post"
+                      action="{{ url_for('storyboard_attach_doc', item_id=it.id) }}">
+                  <input type="hidden" name="kind" value="media">
+                  <select class="form-select form-select-sm bg-dark text-light border-secondary" name="obj_id" required>
+                    <option value="">Attach audio/video…</option>
+                    {% for m in project_media %}
+                      <option value="{{ m.id }}">{{ m.title or ('Media #' ~ m.id) }}</option>
+                    {% endfor %}
+                  </select>
+                  <button class="btn btn-sm btn-outline-light">Attach</button>
+                </form>
+            </div>
+
+            {# ---- Tips linked to this item ---- #}
+            {% set item_tips = (attachments_tips.get(it.id) or []) %}
+            {% if item_tips %}
+            <div class="mt-2 small">
+                <span class="text-secondary">Tips:</span>
+                <ul class="mt-1 mb-2">
+                {% for t in item_tips %}
+                    <li>
+                    {{ t.title or ('Tip #' ~ t.id) }}
+                    <form class="d-inline"
+                            method="post"
+                            action="{{ url_for('storyboard_detach_doc', item_id=it.id) }}">
+                        <input type="hidden" name="kind" value="tip">        {# or 'tip' / 'capture' #}
+                        <input type="hidden" name="obj_id" value="{{ t.id }}"> {# or tip.id / cap.id #}
+                        <button class="btn btn-sm btn-outline-danger">Remove</button>
+                    </form>
+                    </li>
+                {% endfor %}
+                </ul>
+            </div>
+            {% endif %}
+
+            {# Quick attach TIP #}
+            <div class="mt-2">
+            <form class="d-flex gap-2 align-items-center" method="post" action="{{ url_for('storyboard_attach_doc', item_id=it.id) }}">
+                <input type="hidden" name="kind" value="tip">
+                <select class="form-select form-select-sm bg-dark text-light border-secondary" name="obj_id" required>
+                <option value="">Attach a project tip…</option>
+                {% for t in project_tips %}
+                    <option value="{{ t.id }}">
+                    {{ t.title or ('Tip #' ~ t.id) }}
+                    </option>
+                {% endfor %}
+                </select>
+                <button class="btn btn-sm btn-outline-light">Attach</button>
+            </form>
+            </div>
+
+            {# ---- Web Captures linked to this item ---- #}
+            {% set item_caps = (attachments_caps.get(it.id) or []) %}
+            {% if item_caps %}
+            <div class="mt-2 small">
+                <span class="text-secondary">Web Captures:</span>
+                <ul class="mt-1 mb-2">
+                {% for w in item_caps %}
+                    <li>
+                    {% if w.url %}
+                        <a class="link-light" href="{{ w.url }}" target="_blank" rel="noopener">
+                        {{ w.title or ('Capture #' ~ w.id) }}
+                        </a>
+                    {% else %}
+                        {{ w.title or ('Capture #' ~ w.id) }}
+                    {% endif %}
+                    <form class="d-inline"
+                        method="post"
+                        action="{{ url_for('storyboard_detach_doc', item_id=it.id) }}">
+                    <input type="hidden" name="kind" value="capture">        {# or 'tip' / 'capture' #}
+                    <input type="hidden" name="obj_id" value="{{ w.id }}"> {# or tip.id / cap.id #}
+                    <button class="btn btn-sm btn-outline-danger">Remove</button>
+                    </form>
+                    </li>
+                {% endfor %}
+                </ul>
+            </div>
+            {% endif %}
+
+            {# Quick attach CAPTURE #}
+            <div class="mt-2">
+            <form class="d-flex gap-2 align-items-center" method="post" action="{{ url_for('storyboard_attach_doc', item_id=it.id) }}">
+                <input type="hidden" name="kind" value="capture">
+                <select class="form-select form-select-sm bg-dark text-light border-secondary" name="obj_id" required>
+                <option value="">Attach a web capture…</option>
+                {% for w in project_caps %}
+                    <option value="{{ w.id }}">{{ w.title or ('Capture #' ~ w.id) }}</option>
+                {% endfor %}
+                </select>
+                <button class="btn btn-sm btn-outline-light">Attach</button>
+            </form>
+            </div>
+
+            {# ---- Documents linked to this item ---- #}
+            {% set item_docs = (attachments_map.get(it.id) or []) %}
+            {% if item_docs %}
+            <div class="mt-2 small">
+                <span class="text-secondary">Documents:</span>
+                <ul class="mt-1 mb-2">
+                {% for a in item_docs %}
+                    <li>
+                    <a class="link-light" href="{{ url_for('project_doc_download', doc_id=a.id) }}">
+                        {{ a.title or a.filename }}
+                    </a>
+                    <form class="d-inline"
+                        method="post"
+                        action="{{ url_for('storyboard_detach_doc', item_id=it.id) }}">
+                    <input type="hidden" name="kind" value="doc">        {# or 'tip' / 'capture' #}
+                    <input type="hidden" name="obj_id" value="{{ a.id }}"> {# or tip.id / cap.id #}
+                    <button class="btn btn-sm btn-outline-danger">Remove</button>
+                    </form>
+                    </li>
+                {% endfor %}
+                </ul>
+            </div>
+            {% endif %}
+
+            <div class="mt-2">
+            <form class="d-flex gap-2 align-items-center" method="post" action="{{ url_for('storyboard_attach_doc', item_id=it.id) }}">
+                <input type="hidden" name="kind" value="doc">
+                <select class="form-select form-select-sm bg-dark text-light border-secondary" name="obj_id" required>
+                <option value="">Attach a project document…</option>
+                {% for d in project_docs %}
+                    <option value="{{ d.id }}">{{ d.title or d.filename }}</option>
+                {% endfor %}
+                </select>
+                <button class="btn btn-sm btn-outline-light">Attach</button>
+            </form>
+            </div>
+
+          <!-- Edit/Delete controls -->
+          <div class="text-end">
+            <button class="btn btn-sm btn-outline-light" data-bs-toggle="collapse" data-bs-target="#edit-{{ it.id }}">Edit</button>
+            <form class="d-inline" method="post" action="{{ url_for('storyboard_delete', item_id=it.id) }}"
+                  onsubmit="return confirm('Delete this item?');">
+              <button class="btn btn-sm btn-outline-danger">Delete</button>
+            </form>
+          </div>
+        </div>
+
+        <!-- Edit form -->
+        <div id="edit-{{ it.id }}" class="collapse mt-3">
+          <form method="post" action="{{ url_for('storyboard_edit', item_id=it.id) }}">
+            <div class="row g-2">
+              <div class="col-12 col-md-3">
+                <label class="form-label small">When</label>
+                <input type="datetime-local" name="when" class="form-control"
+                        value="{{ it.occurred_at|localfmt('%Y-%m-%dT%H:%M') }}">
+              </div>
+              <div class="col-12 col-md-3">
+                <label class="form-label small">Category</label>
+                <input name="category" class="form-control" list="sb-categories" value="{{ it.category or '' }}" placeholder="Doc / Tip / Event…">
+              </div>
+              <div class="col-12 col-md-6">
+                <label class="form-label small">Title</label>
+                <input name="title" class="form-control" value="{{ it.title }}">
+              </div>
+              <div class="col-12">
+                <label class="form-label small">Body</label>
+                <textarea name="body" class="form-control" rows="3">{{ it.body or '' }}</textarea>
+              </div>
+              <div class="col-12 col-md-5">
+                <label class="form-label small">Source URL</label>
+                <input name="source_url" class="form-control" value="{{ it.source_url or '' }}" placeholder="https://…">
+              </div>
+              <div class="col-12 col-md-4">
+                <label class="form-label small">Tags (comma-separated)</label>
+                <input name="tags" class="form-control" value="{{ it.tags or '' }}" placeholder="leads, docs, event">
+              </div>
+              <div class="col-12 col-md-3">
+                <label class="form-label small">By</label>
+                <input name="created_by" class="form-control" value="{{ it.created_by or '' }}" placeholder="Author / Source">
+              </div>
+              <div class="col-12 text-end">
+                <button class="btn btn-primary">Save Changes</button>
+              </div>
+            </div>
+          </form>
+        </div>
+      </li>
+    {% else %}
+      <li class="list-group-item bg-dark border-secondary text-light">
+        No storyboard items yet. Add your first one!
+      </li>
+    {% endfor %}
+  </ul>
+</div>
+
+<!-- Add Item Modal -->
+<div class="modal fade" id="addItemModal" tabindex="-1" aria-hidden="true">
+  <div class="modal-dialog modal-lg modal-dialog-scrollable">
+    <div class="modal-content bg-dark text-light border border-secondary">
+      <form method="post">
+        <div class="modal-header">
+          <h5 class="modal-title">Add Story Board Item</h5>
+          <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+        </div>
+        <div class="modal-body">
+          <div class="row g-2">
+            <div class="col-12 col-md-3">
+              <label class="form-label small">When</label>
+              <input id="add-when" type="datetime-local" name="when" class="form-control">
+            </div>
+            <div class="col-12 col-md-3">
+              <label class="form-label small">Category</label>
+              <input name="category" class="form-control" list="sb-categories" placeholder="Doc / Tip / Event…">
+            </div>
+            <div class="col-12 col-md-6">
+              <label class="form-label small">Title</label>
+              <input name="title" class="form-control" placeholder="Short headline">
+            </div>
+            <div class="col-12">
+              <label class="form-label small">Body</label>
+              <textarea name="body" class="form-control" rows="4" placeholder="Details, quotes, notes…"></textarea>
+            </div>
+            <div class="col-12 col-md-5">
+              <label class="form-label small">Source URL</label>
+              <input name="source_url" class="form-control" placeholder="https://…">
+            </div>
+            <div class="col-12 col-md-4">
+              <label class="form-label small">Tags (comma-separated)</label>
+              <input name="tags" class="form-control" placeholder="leads, docs, event">
+            </div>
+            <div class="col-12 col-md-3">
+              <label class="form-label small">By</label>
+              <input name="created_by" class="form-control" placeholder="Author / Source">
+            </div>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button class="btn btn-success">Add Item</button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+
+{% endblock %}
+
+{% block scripts_extra %}
+<script>
+  // Prefill "When" in Add modal to current local datetime (YYYY-MM-DDTHH:MM)
+  document.addEventListener('shown.bs.modal', function (e) {
+    if (e.target && e.target.id === 'addItemModal') {
+      const input = document.getElementById('add-when');
+      if (input && !input.value) {
+        const d = new Date();
+        d.setSeconds(0, 0);
+        const pad = n => String(n).padStart(2, '0');
+        const val = d.getFullYear() + '-' + pad(d.getMonth()+1) + '-' + pad(d.getDate())
+                  + 'T' + pad(d.getHours()) + ':' + pad(d.getMinutes());
+        input.value = val;
+      }
+    }
+  });
+</script>
+{% endblock %}

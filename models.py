@@ -1,6 +1,7 @@
 from datetime import datetime, date
 from sqlalchemy import create_engine, Column, Integer, String, Date, DateTime, Enum, ForeignKey, Boolean, Text, Index, Enum as SAEnum, CheckConstraint, func, UniqueConstraint, Table
 from sqlalchemy.orm import declarative_base, relationship, sessionmaker
+from sqlalchemy.sql import func
 from config import Config
 from utils import EncryptedBytes
 from enum import Enum as PyEnum
@@ -404,6 +405,35 @@ class WebCapture(Base):
     error      = Column(Text, nullable=True)
 
     project = relationship("Project", backref="web_captures")
+
+class StoryBoardItem(Base):
+    __tablename__ = "storyboard_item"
+    id = Column(Integer, primary_key=True)
+    project_id = Column(Integer, index=True, nullable=False)
+
+    occurred_at = Column(DateTime, nullable=False, server_default=func.now())
+    title = Column(String(255), nullable=False)
+    body = Column(Text, nullable=True)
+
+    category = Column(String(50), nullable=True)          # e.g. "Lead", "Source Tip", "Doc", "Event"
+    source_url = Column(String(1024), nullable=True)
+    tags = Column(String(255), nullable=True)             # comma-delimited for simplicity
+    created_by = Column(String(120), nullable=True)
+
+    project = relationship(
+        "Project",
+        primaryjoin="StoryBoardItem.project_id == Project.id",
+        foreign_keys=[project_id],
+        backref="storyboard_items",
+        lazy="joined",
+    )
+
+class StoryBoardItemDoc(Base):
+    __tablename__ = "storyboard_item_docs"
+    item_id = Column(Integer, ForeignKey("storyboard_item.id", ondelete="CASCADE"), primary_key=True)
+    doc_id  = Column(Integer, ForeignKey("project_documents.id", ondelete="CASCADE"), primary_key=True)
+
+    __table_args__ = (UniqueConstraint("item_id", "doc_id", name="uq_story_item_doc"),)
 
 def init_db():
     Base.metadata.create_all(engine)
