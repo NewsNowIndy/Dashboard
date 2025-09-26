@@ -1,0 +1,6 @@
+ocrmypdf
+tesseract-ocr
+qpdf
+ghostscript
+pngquant
+wkhtmltopdf

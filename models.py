@@ -419,6 +419,7 @@ class StoryBoardItem(Base):
     source_url = Column(String(1024), nullable=True)
     tags = Column(String(255), nullable=True)             # comma-delimited for simplicity
     created_by = Column(String(120), nullable=True)
+    position = Column(Integer, nullable=True, index=True)
 
     project = relationship(
         "Project",

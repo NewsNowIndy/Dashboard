@@ -342,6 +342,13 @@
                 <button class="btn btn-sm btn-outline-success ms-2" disabled>Link</button>
                 <small class="text-warning ms-1">attach this FOIA to a project first</small>
               {% endif %}
+
+                <form method="post"
+                    action="{{ url_for('request_attachment_delete', req_id=r.id, att_id=a.id) }}"
+                    class="d-inline ms-2"
+                    onsubmit="return confirm('Delete this PDF? This cannot be undone.');">
+                <button class="btn btn-sm btn-outline-danger">Delete</button>
+              </form>
             </li>
           {% endfor %}
         </ul>
