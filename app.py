@@ -126,7 +126,8 @@ def ensure_storyboard_tables(engine):
           category TEXT,
           source_url TEXT,
           tags TEXT,
-          created_by TEXT
+          created_by TEXT,
+          position INTEGER
         );
         """))
         conn.execute(text("""
@@ -178,6 +179,10 @@ def ensure_storyboard_tables(engine):
           UNIQUE (item_id, media_id)
         );
         """))
+
+        existing = [r["name"] for r in conn.execute(text("PRAGMA table_info(storyboard_item)")).mappings()]
+        if "position" not in existing:
+            conn.execute(text("ALTER TABLE storyboard_item ADD COLUMN position INTEGER"))
 
 def _storyboard_item_docs(db, proj_slug, item_ids):
     if not item_ids:
@@ -310,7 +315,20 @@ def _storyboard_attachment_maps(db, project):
         _storyboard_item_captures(db, project.id, item_ids),
     )
 
-def _link_attachment_to_project_document(db, att: FoiaAttachment, project: Project, ensure_text: bool = False) -> ProjectDocument:
+def _link_attachment_to_project_document(
+    db,
+    att: FoiaAttachment,
+    project: Project,
+    ensure_text: bool = False
+) -> ProjectDocument:
+    """
+    Copy a FOIA PDF attachment into the project's folder, optionally ensure it is
+    OCR/searchable, then create a ProjectDocument and index the *final* (OCR'd) bytes.
+
+    - Prefers the attachment's existing OCR copy (att.ocr_pdf_path) if present.
+    - If ensure_text is True (recommended), we sniff for text and run OCR if needed,
+      replacing the destination file in-place so indexing uses the OCR'd bytes.
+    """
     if not _is_pdf_attachment(att):
         raise ValueError("Attachment is not a PDF")
 
@@ -323,6 +341,7 @@ def _link_attachment_to_project_document(db, att: FoiaAttachment, project: Proje
     if att.ocr_pdf_path and os.path.exists(att.ocr_pdf_path):
         src_path = att.ocr_pdf_path
     elif att.stored_path and os.path.exists(att.stored_path):
+        # May be an encrypted Gmail blob; decrypt to bytes (falls back to raw in caller)
         decrypted_bytes = decrypt_file_to_bytes(att.stored_path)
     else:
         raise FileNotFoundError("Attachment file not found")
@@ -331,6 +350,7 @@ def _link_attachment_to_project_document(db, att: FoiaAttachment, project: Proje
     if not base_name.lower().endswith(".pdf"):
         base_name += ".pdf"
 
+    # Choose a unique destination path inside the project folder
     dest_path = os.path.join(dest_dir, base_name)
     base, ext = os.path.splitext(base_name)
     i = 1
@@ -338,28 +358,33 @@ def _link_attachment_to_project_document(db, att: FoiaAttachment, project: Proje
         dest_path = os.path.join(dest_dir, f"{base}-{i}{ext}")
         i += 1
 
+    # Write/copy into place
     if src_path:
         shutil.copyfile(src_path, dest_path)
     else:
         with open(dest_path, "wb") as fh:
             fh.write(decrypted_bytes or b"")
 
-    # Optional: only run OCR again if explicitly requested
+    # Ensure we have searchable text *in dest_path* (so indexing uses OCR'd bytes)
     if ensure_text:
         try:
             pre_txt = extract_pdf_text(dest_path, ocr_fallback=False) or ""
-            if len(pre_txt.strip()) < 20:
+            # Use a slightly higher threshold to catch garbage/empty text layers
+            if len(pre_txt.strip()) < 50:
                 fixed = make_searchable_pdf(dest_path, lang="eng")
-                if fixed and fixed != dest_path:
+                # If OCR created a new file, replace the destination in-place
+                if fixed and fixed != dest_path and os.path.exists(fixed):
                     os.replace(fixed, dest_path)
         except Exception:
             app.logger.exception("OCR ensure failed for %r", dest_path)
 
+    # File stats after any OCR replace
     try:
         size = os.path.getsize(dest_path)
     except Exception:
         size = 0
 
+    # Create the ProjectDocument row
     doc = ProjectDocument(
         project_slug=project.slug,
         title=base_name,
@@ -369,14 +394,15 @@ def _link_attachment_to_project_document(db, att: FoiaAttachment, project: Proje
         size=size
     )
     db.add(doc)
-    db.flush()
+    db.flush()  # doc.id available
 
-    # Index into FTS
+    # Index into FTS from the *final* file (OCR’d if applicable)
     try:
         body = extract_pdf_text(dest_path) or ""
     except Exception:
         app.logger.exception("extract_pdf_text failed for doc_id=%s", doc.id)
         body = ""
+
     try:
         db.execute(text("DELETE FROM doc_fts WHERE doc_id = :id"), {"id": doc.id})
         db.execute(text("""
@@ -388,7 +414,32 @@ def _link_attachment_to_project_document(db, att: FoiaAttachment, project: Proje
 
     return doc
 
+def backfill_storyboard_positions(engine):
+    """
+    For each project, set missing position values in occurred_at order starting at 1.
+    Safe to re-run; only fills NULLs.
+    """
+    with engine.begin() as conn:
+        project_ids = [row[0] for row in conn.execute(text("SELECT DISTINCT project_id FROM storyboard_item"))]
+        for pid in project_ids:
+            rows = list(conn.execute(text("""
+                SELECT id FROM storyboard_item
+                WHERE project_id=:pid AND (position IS NULL)
+                ORDER BY occurred_at ASC, id ASC
+            """), {"pid": pid}))
+            if not rows:
+                continue
+            # find current max
+            maxpos = conn.execute(text("""
+                SELECT COALESCE(MAX(position), 0) FROM storyboard_item WHERE project_id=:pid
+            """), {"pid": pid}).scalar() or 0
+            pos = maxpos + 1
+            for (item_id,) in rows:
+                conn.execute(text("UPDATE storyboard_item SET position=:p WHERE id=:id"), {"p": pos, "id": item_id})
+                pos += 1
+
 ensure_storyboard_tables(engine)
+backfill_storyboard_positions(engine)
 
 app = Flask(__name__)
 app.config.from_object(Config)
@@ -410,6 +461,8 @@ app.config["MAX_FORM_MEMORY_SIZE"] = 128 * 1024 * 1024     # 128 MB memory thres
 app.config["MAX_FORM_PARTS"] = 20000                       # lots of parts for multi-file uploads
 app.config["TRAP_BAD_REQUEST_ERRORS"] = True 
 init_db()
+
+HAS_OCRMYPDF = bool(shutil.which("ocrmypdf"))
 
 ensure_webcap_columns(engine)
 
@@ -443,6 +496,8 @@ try:
     HAS_WEASYPRINT = True
 except Exception:
     HAS_WEASYPRINT = False
+
+HAS_OCRMYPDF = shutil.which("ocrmypdf") is not None
 
 # -----------------------------
 # Helpers
@@ -743,14 +798,14 @@ def make_searchable_pdf(in_path: str, lang: str = "eng") -> str:
     Run ocrmypdf to produce a searchable PDF. Returns path to the new file.
     If OCR fails or ocrmypdf is missing, returns the original path.
     """
+    if not HAS_OCRMYPDF:
+        return in_path
     try:
         fd, out_path = tempfile.mkstemp(suffix=".pdf")
         os.close(fd)
-        # --skip-text keeps original text layers; only OCRs image-only pages
         subprocess.check_call(["ocrmypdf", "--skip-text", "-l", lang, in_path, out_path])
         return out_path
     except Exception:
-        # cleanup and fall back to original
         try:
             if 'out_path' in locals() and os.path.exists(out_path):
                 os.remove(out_path)
@@ -1241,6 +1296,7 @@ def request_attachment_upload(req_id: int):
         os.makedirs(dest_dir, exist_ok=True)
 
         uploaded, skipped = 0, []
+        ocr_warned = False
 
         for f in files:
             if not f or not f.filename:
@@ -1272,23 +1328,25 @@ def request_attachment_upload(req_id: int):
             except Exception:
                 size = 0
 
-            # Try to see if it already has text; if not, make a searchable copy
+            # Force an OCR attempt (safe due to --skip-text inside make_searchable_pdf)
             ocr_pdf_path = None
             try:
-                pre_txt = extract_pdf_text(stored_path, ocr_fallback=False) or ""
-                if len(pre_txt.strip()) < 20:
-                    # Make searchable copy
-                    ocr_out = make_searchable_pdf(stored_path, lang="eng")
-                    if ocr_out and os.path.exists(ocr_out) and ocr_out != stored_path:
-                        # keep original at stored_path, put OCR copy beside it
-                        ocr_pdf_path = os.path.join(dest_dir, f"OCR-{filename}")
-                        try:
-                            os.replace(ocr_out, ocr_pdf_path)
-                        except Exception:
-                            # best-effort; if replace fails, keep ocr_out path
-                            ocr_pdf_path = ocr_out
+                has_ocr = (shutil.which("ocrmypdf") is not None)
+                if not has_ocr and not ocr_warned:
+                    flash("Note: OCR tool (ocrmypdf) not installed; uploaded PDFs may not be searchable.", "warning")
+                    ocr_warned = True
+
+                ocr_out = make_searchable_pdf(stored_path, lang="eng")
+                if ocr_out and os.path.exists(ocr_out) and ocr_out != stored_path:
+                    # keep original; save OCR’d sibling as OCR-<filename>
+                    ocr_pdf_path = os.path.join(dest_dir, f"OCR-{filename}")
+                    try:
+                        os.replace(ocr_out, ocr_pdf_path)
+                    except Exception:
+                        # fall back to whatever temp path came back
+                        ocr_pdf_path = ocr_out
             except Exception:
-                app.logger.exception("OCR check failed for %r", stored_path)
+                app.logger.exception("OCR step failed for %r", stored_path)
 
             att = FoiaAttachment(
                 foia_request_id=r.id,
@@ -1306,6 +1364,34 @@ def request_attachment_upload(req_id: int):
         if uploaded: msg.append(f"Uploaded {uploaded} PDF{'s' if uploaded!=1 else ''}.")
         if skipped:  msg.append("Skipped: " + "; ".join(skipped))
         flash(" ".join(msg) if msg else "No files processed.")
+        return redirect(url_for("request_detail", req_id=req_id))
+    finally:
+        db.close()
+
+@app.post("/requests/<int:req_id>/attachments/<int:att_id>/delete")
+@login_required
+def request_attachment_delete(req_id: int, att_id: int):
+    db = SessionLocal()
+    try:
+        r = db.get(FoiaRequest, req_id)
+        a = db.get(FoiaAttachment, att_id)
+
+        if not r or not a or a.foia_request_id != r.id:
+            flash("Attachment not found for this request.", "warning")
+            return redirect(url_for("request_detail", req_id=req_id))
+
+        # Remove files from disk (best effort)
+        for path in (a.stored_path, a.ocr_pdf_path):
+            try:
+                if path and os.path.exists(path):
+                    os.remove(path)
+            except Exception:
+                app.logger.exception("Failed to remove attachment file %r", path)
+
+        # Delete DB row
+        db.delete(a)
+        db.commit()
+        flash("Attachment deleted.", "success")
         return redirect(url_for("request_detail", req_id=req_id))
     finally:
         db.close()
@@ -1849,8 +1935,8 @@ def project_mcpo_upload():
     os.makedirs(dest_dir, exist_ok=True)
 
     db = SessionLocal()
-    # NEW: collect events to fire after commit
     pending_events = []
+    ocr_warned = False
 
     try:
         # Help avoid transient writer conflicts on SQLite
@@ -1889,6 +1975,7 @@ def project_mcpo_upload():
                 skipped.append(f"{filename} (save error)")
                 continue
 
+            # Determine size/mime after save
             try:
                 size = os.path.getsize(stored_path)
             except Exception:
@@ -1897,22 +1984,23 @@ def project_mcpo_upload():
             mime = f.mimetype or None
             looks_like_pdf = (mime and mime.lower().startswith("application/pdf")) or stored_path.lower().endswith(".pdf")
 
-            # --- If PDF, ensure it has a text layer before indexing (ocrmypdf) ---
+            # If PDF, force an OCR attempt to ensure a text layer
             if looks_like_pdf:
                 try:
-                    # Quick sniff for text layer (no OCR fallback here)
-                    pre_txt = extract_pdf_text(stored_path, ocr_fallback=False) or ""
-                    if len(pre_txt.strip()) < 20:
-                        # Likely scanned → make a searchable copy
-                        ocr_path = make_searchable_pdf(stored_path, lang="eng")
-                        if ocr_path and ocr_path != stored_path:
-                            os.replace(ocr_path, stored_path)
+                    has_ocr = (shutil.which("ocrmypdf") is not None)
+                    if not has_ocr and not ocr_warned:
+                        flash("Note: OCR tool (ocrmypdf) not installed; uploaded PDFs may not be searchable.", "warning")
+                        ocr_warned = True
+
+                    ocr_path = make_searchable_pdf(stored_path, lang="eng")
+                    if ocr_path and ocr_path != stored_path:
+                        os.replace(ocr_path, stored_path)
                         try:
                             size = os.path.getsize(stored_path)
                         except Exception:
                             pass
-                        # normalize mime
-                        mime = "application/pdf"
+                    # normalize mime in case the browser didn't set it
+                    mime = "application/pdf"
                 except Exception:
                     app.logger.exception("ocrmypdf failed for %r", stored_path)
 
@@ -1939,7 +2027,6 @@ def project_mcpo_upload():
                     body = ""
 
                 try:
-                    # simple upsert: delete then insert to avoid dupes
                     db.execute(text("DELETE FROM doc_fts WHERE doc_id = :id"), {"id": doc.id})
                     db.execute(text("""
                         INSERT INTO doc_fts (doc_id, title, body)
@@ -1948,7 +2035,7 @@ def project_mcpo_upload():
                 except Exception:
                     app.logger.exception("FTS index insert failed for doc_id=%s", doc.id)
 
-            # NEW: queue Signal event; we will emit AFTER commit
+            # Queue Signal event; emit AFTER commit
             try:
                 proj_id = db.query(Project.id).filter(Project.slug == doc.project_slug).scalar()
                 pending_events.append(("document.uploaded", {"doc_id": doc.id, "project_id": proj_id}))
@@ -1960,7 +2047,7 @@ def project_mcpo_upload():
     finally:
         db.close()
 
-    # Fire queued events AFTER the data is committed/visible to listener sessions
+    # Fire queued events AFTER the data is committed
     for name, payload in pending_events:
         try:
             emit(name, **payload)
@@ -2999,22 +3086,37 @@ def project_storyboard(project_id):
 
         if request.method == "POST":
             f = request.form
+
+            # Seed position to the end (max+1) for this project
+            max_pos = (
+                db.query(func.coalesce(func.max(StoryBoardItem.position), 0))
+                  .filter(StoryBoardItem.project_id == project.id)
+                  .scalar()
+                or 0
+            )
+
             item = StoryBoardItem(
                 project_id=project.id,
-                occurred_at=datetime.fromisoformat(f.get("when")).replace(tzinfo=None) if f.get("when") else datetime.utcnow(),
-                title=f.get("title","").strip() or "Untitled",
-                body=f.get("body","").strip() or None,
-                category=f.get("category","").strip() or None,
-                source_url=f.get("source_url","").strip() or None,
-                tags=f.get("tags","").strip() or None,
-                created_by=f.get("created_by","").strip() or None,
+                occurred_at=(
+                    datetime.fromisoformat(f.get("when")).replace(tzinfo=None)
+                    if f.get("when") else datetime.utcnow()
+                ),
+                title=(f.get("title","").strip() or "Untitled"),
+                body=(f.get("body","").strip() or None),
+                category=(f.get("category","").strip() or None),
+                source_url=(f.get("source_url","").strip() or None),
+                tags=(f.get("tags","").strip() or None),
+                created_by=(f.get("created_by","").strip() or None),
+                position=max_pos + 1,  # NEW
             )
             db.add(item)
             db.commit()
             return redirect(url_for("project_storyboard", project_id=project.id))
 
+        # ----- GET: list -----
         q = request.args.get("q","").strip()
         cat = request.args.get("cat","").strip()
+
         items = db.query(StoryBoardItem).filter(StoryBoardItem.project_id == project.id)
         if q:
             like = f"%{q}%"
@@ -3025,7 +3127,13 @@ def project_storyboard(project_id):
             )
         if cat:
             items = items.filter(StoryBoardItem.category == cat)
-        items = items.order_by(StoryBoardItem.occurred_at.asc()).all()
+
+        # Sort by position (NULLS LAST) then occurred_at
+        items = items.order_by(
+            case((StoryBoardItem.position == None, 1), else_=0),  # NULLS last
+            StoryBoardItem.position.asc(),
+            StoryBoardItem.occurred_at.asc()
+        ).all()
 
         proj_slug = db.query(Project.slug).filter(Project.id == project.id).scalar()
         item_ids = [it.id for it in items]
@@ -3038,21 +3146,21 @@ def project_storyboard(project_id):
 
         project_docs = (
             db.query(ProjectDocument)
-            .filter(ProjectDocument.project_slug == proj_slug)
-            .order_by(ProjectDocument.uploaded_at.desc())
-            .all()
+              .filter(ProjectDocument.project_slug == proj_slug)
+              .order_by(ProjectDocument.uploaded_at.desc())
+              .all()
         )
         project_tips = (
             db.query(Tip)
-            .filter(Tip.project_id == project.id)
-            .order_by(Tip.created_at.desc())
-            .all()
+              .filter(Tip.project_id == project.id)
+              .order_by(Tip.created_at.desc())
+              .all()
         )
         project_caps = (
             db.query(WebCapture)
-            .filter(WebCapture.project_id == project.id)
-            .order_by(WebCapture.captured_at.desc())
-            .all()
+              .filter(WebCapture.project_id == project.id)
+              .order_by(WebCapture.captured_at.desc())
+              .all()
         )
 
         project_contacts = sorted(
@@ -3062,17 +3170,17 @@ def project_storyboard(project_id):
 
         project_notebook = (
             db.query(CaseNotebookEntry)
-            .filter(CaseNotebookEntry.project_id == project.id)
-            .order_by(CaseNotebookEntry.created_at.desc())
-            .all()
+              .filter(CaseNotebookEntry.project_id == project.id)
+              .order_by(CaseNotebookEntry.created_at.desc())
+              .all()
         )
         project_media = (
             db.query(MediaItem)
-            .filter(MediaItem.project_id == project.id)
-            .order_by(MediaItem.created_at.desc())
-            .all()
+              .filter(MediaItem.project_id == project.id)
+              .order_by(MediaItem.created_at.desc())
+              .all()
         )
-        
+
         return render_template(
             "storyboard.html",
             project=project, items=items, q=q, cat=cat, categories=STORYBOARD_CATEGORIES,
@@ -3109,6 +3217,37 @@ def storyboard_edit(item_id):
         item.created_by = f.get("created_by","").strip() or None
         db.commit()
         return redirect(url_for("project_storyboard", project_id=item.project_id))
+    
+@app.post("/storyboard/reorder")
+@login_required
+def storyboard_reorder():
+    data = request.get_json(silent=True) or {}
+    project_id = int(data.get("project_id") or 0)
+    order = data.get("order") or []  # list of item IDs in the new order
+
+    if not project_id or not order:
+        return ("Bad request", 400)
+
+    with SessionLocal() as db:
+        # Security: ensure user can access project (you already protect with login)
+        items = (db.query(StoryBoardItem)
+                   .filter(StoryBoardItem.project_id == project_id,
+                           StoryBoardItem.id.in_(order))
+                   .all())
+        id_to_item = {it.id: it for it in items}
+
+        pos = 1
+        for sid in order:
+            try:
+                sid_int = int(sid)
+            except:
+                continue
+            it = id_to_item.get(sid_int)
+            if it:
+                it.position = pos
+                pos += 1
+        db.commit()
+    return ("OK", 200)
 
 # --- Delete item ---
 @app.route("/storyboard/<int:item_id>/delete", methods=["POST"])
