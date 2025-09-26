@@ -37,6 +37,18 @@ def _update_dotenv_var(key: str, value: str, path: str = ".env"):
         return True, None
     except Exception as e:
         return False, str(e)
+    
+def _resolve_gl_base() -> str:
+    """
+    Decide which base URL to use for GlobaLeaks.
+    - If USE_ONION is truthy, prefer GLOBALEAKS_ONION.
+    - Else use GLOBALEAKS_BASE_URL.
+    Returns "" if neither is set.
+    """
+    use_onion = (os.getenv("USE_ONION", "0").lower() in ("1", "true", "yes"))
+    if use_onion:
+        return os.getenv("GLOBALEAKS_ONION", "") or ""
+    return os.getenv("GLOBALEAKS_BASE_URL", "") or ""
 
 @bp.route("/")
 @login_required
@@ -49,69 +61,39 @@ def index():
         from tip_helpers import derive_titles_for_missing
         derived_titles = derive_titles_for_missing(tips)
 
-        # Whether a session is already present in this Flask process
-        gl_session_present = bool(os.getenv("GLOBALEAKS_SESSION_ID"))
-
-        return render_template(
-            "tips_index.html",
-            tips=tips,
-            derived_titles=derived_titles,
-            gl_session_present=gl_session_present
-        )
+        return render_template("tips_index.html", tips=tips, derived_titles=derived_titles)
     finally:
         db.close()
 
 @bp.route("/sync", methods=["POST", "GET"])
 @login_required
 def sync_now():
-    """
-    Optionally accept a session_id from the modal. If provided, set it in-process and,
-    if requested, write it to .env so the next run has it too. Then perform the sync.
-    """
-    # If the modal was used, fields will be present (POST)
-    session_id = (request.form.get("session_id") or "").strip()
-    remember = (request.form.get("remember") == "1")
-
-    # Apply the session id for this running process (works immediately)
-    if session_id:
-        os.environ["GLOBALEAKS_SESSION_ID"] = session_id
-
-        if remember:
-            ok, err = _update_dotenv_var("GLOBALEAKS_SESSION_ID", session_id, path=".env")
-            if ok:
-                flash("Saved GlobaLeaks session ID to .env (will be used on restart).", "success")
-            else:
-                flash(f"Could not update .env: {err}", "warning")
-
-    # If we STILL have no session id available, stop and ask user to paste it
-    if not os.getenv("GLOBALEAKS_SESSION_ID"):
-        flash("GlobaLeaks Session ID is required. Paste it in the Sync dialog.", "warning")
-        return redirect(url_for("tips.index"))
-
-    # Now attempt the sync
+    # Convenience sync from the UI
     from tips_sync import sync_once
     try:
         ins, upd = sync_once()
         flash(f"Synchronized tips: +{ins} new, {upd} updated", "success")
     except HTTPError as e:
         body = getattr(e.response, "text", "")
-        code = getattr(e.response, "status_code", "???")
+        code = getattr(e.response, "status_code", "unknown")
         flash(f"Tip sync failed ({code}). See logs. {body[:300]}", "danger")
-        return redirect(url_for("tips.index"))
-    except Exception as e:
+    except RuntimeError as e:
         flash(f"Tip sync failed: {e}", "danger")
-        return redirect(url_for("tips.index"))
-
-    # After syncing, send the user somewhere useful; your app currently goes to the project page
-    return redirect(url_for("project_detail", slug="mcpo-plea-deals"))
+    return redirect(url_for("tips.index"))
 
 @bp.route("/<string:tip_id>")
 @login_required
 def detail(tip_id):
+    base = _resolve_gl_base()
+    if not base:
+        flash("GlobaLeaks base URL is not configured. Set GLOBALEAKS_BASE_URL (or USE_ONION=1 and GLOBALEAKS_ONION).", "warning")
+        return redirect(url_for("tips.index"))
+
     db = SessionLocal()
     try:
         projects = db.query(Project).order_by(Project.name.asc()).all()
-        client = TorGlobaLeaksClient('', '', '')
+        # Build the client with an explicit base so we never rely on global state.
+        client = TorGlobaLeaksClient(base, os.getenv("GLOBALEAKS_USERNAME", ""), os.getenv("GLOBALEAKS_PASSWORD", ""))
 
         TITLE_KEY = "e239d748-12e9-4c3f-b401-58c699c66a4e"     # short title
         SUMMARY_KEY = "0f2c5077-90f3-4b0d-8346-21b5c3b8a627"   # long description
@@ -143,6 +125,7 @@ def detail(tip_id):
                 live=True,
             )
         except Exception:
+            # Fallback to DB if live fetch fails
             t = db.query(Tip).filter(Tip.glk_id == tip_id).first()
             if not t:
                 flash("Tip not found locally.", "warning")
@@ -162,6 +145,9 @@ def detail(tip_id):
 @bp.post("/<string:glk_id>/project")
 @login_required
 def set_project(glk_id: str):
+    """
+    Link/unlink a Tip to a Project.
+    """
     pid = (request.form.get("project_id") or "").strip()
     db = SessionLocal()
     try:
