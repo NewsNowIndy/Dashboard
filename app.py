@@ -31,8 +31,9 @@ from sheets_ingest import import_cases_from_csv, import_cases_from_gsheet, impor
 from werkzeug.utils import secure_filename
 from werkzeug.exceptions import RequestEntityTooLarge, BadRequest, ClientDisconnected
 from werkzeug.security import generate_password_hash
-from sqlalchemy import func, or_, case, text, desc, event, text, bindparam
+from sqlalchemy import func, or_, case, text, desc, event, text, bindparam, inspect
 from sqlalchemy.engine import Engine
+from sqlalchemy.orm import Session
 from pdfminer.high_level import extract_text
 from routes_search import bp_search
 from routes_docs import bp_docs
@@ -115,6 +116,8 @@ def ensure_webcap_columns(engine):
                 conn.execute(text(f"ALTER TABLE web_captures ADD COLUMN {col} {dtype}"))
 
 def ensure_storyboard_tables(engine):
+    """Create storyboard tables, ensure `position` column exists, and backfill positions."""
+    # 1) Create tables (safe if they already exist)
     with engine.begin() as conn:
         conn.execute(text("""
         CREATE TABLE IF NOT EXISTS storyboard_item (
@@ -130,6 +133,7 @@ def ensure_storyboard_tables(engine):
           position INTEGER
         );
         """))
+
         conn.execute(text("""
         CREATE TABLE IF NOT EXISTS storyboard_item_docs (
           item_id INTEGER NOT NULL,
@@ -138,6 +142,7 @@ def ensure_storyboard_tables(engine):
           UNIQUE (item_id, doc_id)
         );
         """))
+
         conn.execute(text("""
         CREATE TABLE IF NOT EXISTS storyboard_item_tips (
           item_id INTEGER NOT NULL,
@@ -146,6 +151,7 @@ def ensure_storyboard_tables(engine):
           UNIQUE (item_id, tip_id)
         );
         """))
+
         conn.execute(text("""
         CREATE TABLE IF NOT EXISTS storyboard_item_captures (
           item_id INTEGER NOT NULL,
@@ -163,6 +169,7 @@ def ensure_storyboard_tables(engine):
           UNIQUE (item_id, contact_id)
         );
         """))
+
         conn.execute(text("""
         CREATE TABLE IF NOT EXISTS storyboard_item_notebook (
           item_id INTEGER NOT NULL,
@@ -171,6 +178,7 @@ def ensure_storyboard_tables(engine):
           UNIQUE (item_id, entry_id)
         );
         """))
+
         conn.execute(text("""
         CREATE TABLE IF NOT EXISTS storyboard_item_media (
           item_id INTEGER NOT NULL,
@@ -180,9 +188,36 @@ def ensure_storyboard_tables(engine):
         );
         """))
 
-        existing = [r["name"] for r in conn.execute(text("PRAGMA table_info(storyboard_item)")).mappings()]
-        if "position" not in existing:
+        # 2) Ensure `position` column exists for legacy DBs
+        cols = [r["name"] for r in conn.execute(text("PRAGMA table_info(storyboard_item)")).mappings()]
+        if "position" not in cols:
             conn.execute(text("ALTER TABLE storyboard_item ADD COLUMN position INTEGER"))
+
+        # 3) Helpful indexes (no-ops if already created)
+        conn.execute(text("CREATE INDEX IF NOT EXISTS idx_sb_item_project ON storyboard_item(project_id)"))
+        conn.execute(text("CREATE INDEX IF NOT EXISTS idx_sb_item_project_pos ON storyboard_item(project_id, position)"))
+        conn.execute(text("CREATE INDEX IF NOT EXISTS idx_sb_item_project_occurred ON storyboard_item(project_id, occurred_at)"))
+
+    # 4) Backfill `position` for any NULL rows (per project, by occurred_at then id)
+    with engine.begin() as conn:
+        rows = conn.execute(text("""
+            SELECT id, project_id
+            FROM storyboard_item
+            WHERE position IS NULL
+            ORDER BY project_id ASC, occurred_at ASC, id ASC
+        """)).fetchall()
+
+        current_proj = None
+        counter = 0
+        for rid, proj_id in rows:
+            if proj_id != current_proj:
+                current_proj = proj_id
+                counter = 0
+            counter += 1  # start at 1
+            conn.execute(
+                text("UPDATE storyboard_item SET position = :p WHERE id = :id"),
+                {"p": counter, "id": rid}
+            )
 
 def _storyboard_item_docs(db, proj_slug, item_ids):
     if not item_ids:
