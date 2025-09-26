@@ -55,6 +55,7 @@ from routes_mail import bp as bp_mail
 from routes_contacts import bp as bp_contacts
 from models import ContactType
 from routes_webcapture import bp as webcap_bp
+from cryptography.fernet import InvalidToken
 
 @event.listens_for(Engine, "connect")
 def _sqlite_pragmas(dbapi_conn, _):
@@ -1312,54 +1313,121 @@ def request_attachment_upload(req_id: int):
 @app.post("/requests/<int:req_id>/attachments/<int:att_id>/link")
 @login_required
 def link_attachment_to_project(req_id: int, att_id: int):
+    import shutil
+
     db = SessionLocal()
-    pending_event = None
     try:
         r = db.get(FoiaRequest, req_id)
-        if not r:
-            flash("Request not found.", "warning")
-            return redirect(url_for("home"))
+        a = db.get(FoiaAttachment, att_id)
+
+        if not r or not a or a.foia_request_id != r.id:
+            flash("Attachment not found for this request.", "warning")
+            return redirect(url_for("request_detail", req_id=req_id))
 
         if not r.project_id:
             flash("Attach this FOIA to a project first.", "warning")
             return redirect(url_for("request_detail", req_id=req_id))
 
-        a = db.get(FoiaAttachment, att_id)
-        if not a or a.foia_request_id != r.id:
-            flash("Attachment not found for this request.", "warning")
-            return redirect(url_for("request_detail", req_id=req_id))
-
-        if not _is_pdf_attachment(a):
-            flash("Only PDF attachments can be linked.", "warning")
-            return redirect(url_for("request_detail", req_id=req_id))
-
-        project = db.get(Project, r.project_id)
-        if not project:
+        p = db.get(Project, r.project_id)
+        if not p:
             flash("Project not found.", "warning")
             return redirect(url_for("request_detail", req_id=req_id))
 
-        # Copy the OCR’d file if present (no new OCR here)
-        doc = _link_attachment_to_project_document(db, a, project, ensure_text=False)
+        # Decide source: prefer OCR file; otherwise original (may be encrypted or plain)
+        src_path = a.ocr_pdf_path if (a.ocr_pdf_path and os.path.exists(a.ocr_pdf_path)) else a.stored_path
+        if not src_path or not os.path.exists(src_path):
+            flash("Source PDF not found on disk.", "warning")
+            return redirect(url_for("request_detail", req_id=req_id))
+
+        # Destination in the project's folder
+        dest_dir = os.path.join(Config.PROJECTS_DIR, p.slug)
+        os.makedirs(dest_dir, exist_ok=True)
+
+        # Base filename
+        filename = secure_filename(a.filename or os.path.basename(src_path) or "document.pdf")
+        base, ext = os.path.splitext(filename)
+        if ext.lower() != ".pdf":  # normalize to .pdf
+            ext = ".pdf"
+        dest_path = os.path.join(dest_dir, base + ext)
+
+        # Ensure unique
+        i = 1
+        while os.path.exists(dest_path):
+            dest_path = os.path.join(dest_dir, f"{base}-{i}{ext}")
+            i += 1
+
+        # Copy/decrypt into place
+        wrote_bytes = False
+        if src_path == a.stored_path and not (a.ocr_pdf_path and os.path.exists(a.ocr_pdf_path)):
+            # Might be encrypted (gmail) or plain (manual upload)
+            try:
+                buf = decrypt_file_to_bytes(src_path)
+                with open(dest_path, "wb") as out:
+                    out.write(buf)
+                wrote_bytes = True
+            except InvalidToken:
+                # Not encrypted → plain copy
+                shutil.copyfile(src_path, dest_path)
+            except Exception:
+                # If decrypt unexpectedly fails, try plain copy
+                try:
+                    shutil.copyfile(src_path, dest_path)
+                except Exception:
+                    app.logger.exception("Link copy failed for att_id=%s", att_id)
+                    flash("Failed to copy PDF into project folder.", "danger")
+                    return redirect(url_for("request_detail", req_id=req_id))
+        else:
+            # OCR file exists or we’re explicitly using it
+            shutil.copyfile(src_path, dest_path)
+
+        try:
+            size = os.path.getsize(dest_path)
+        except Exception:
+            size = 0
+
+        # Create ProjectDocument
+        doc = ProjectDocument(
+            project_slug=p.slug,
+            title=filename,
+            filename=os.path.basename(dest_path),
+            stored_path=dest_path,
+            mime_type="application/pdf",
+            size=size,
+            notes=None
+        )
+        db.add(doc)
+        db.flush()  # get doc.id
+
+        # Index into FTS
+        try:
+            body = extract_pdf_text(dest_path) or ""
+        except Exception:
+            app.logger.exception("extract_pdf_text failed for linked doc_id=%s", getattr(doc, "id", None))
+            body = ""
+
+        try:
+            db.execute(text("DELETE FROM doc_fts WHERE doc_id = :id"), {"id": doc.id})
+            db.execute(text("""
+                INSERT INTO doc_fts (doc_id, title, body)
+                VALUES (:id, :title, :body)
+            """), {"id": doc.id, "title": (doc.title or doc.filename or "Untitled"), "body": body})
+        except Exception:
+            app.logger.exception("FTS insert failed for linked doc_id=%s", getattr(doc, "id", None))
 
         db.commit()
 
-        pending_event = ("document.uploaded", {"doc_id": doc.id, "project_id": project.id})
-        flash(f"Linked '{a.filename or 'attachment.pdf'}' to project '{project.name}'.", "success")
-        return redirect(url_for("request_detail", req_id=req_id))
+        # Emit after commit so listeners see it
+        try:
+            emit("document.uploaded",
+                 doc_id=doc.id,
+                 project_id=p.id)
+        except Exception:
+            app.logger.exception("emit(document.uploaded) failed for linked doc_id=%s", doc.id)
 
-    except Exception as e:
-        db.rollback()
-        app.logger.exception("Error linking attachment to project")
-        flash(f"Link failed: {e}", "danger")
+        flash("Attachment linked to project.", "success")
         return redirect(url_for("request_detail", req_id=req_id))
     finally:
         db.close()
-        if pending_event:
-            try:
-                name, payload = pending_event
-                emit(name, **payload)
-            except Exception:
-                app.logger.exception("emit(%s) failed payload=%r", name, payload)
 
 # -----------------------------
 # FOIA: Attachments (encrypted + OCR copy)
@@ -1379,8 +1447,35 @@ def download_attachment(att_id):
             flash("Only PDF attachments are available.")
             return redirect(url_for("request_detail", req_id=a.foia_request_id))
 
-        buf = decrypt_file_to_bytes(a.stored_path)
-        return send_file(io.BytesIO(buf), as_attachment=True, download_name=a.filename or "attachment.pdf")
+        # Prefer searchable OCR copy if it exists
+        if a.ocr_pdf_path and os.path.exists(a.ocr_pdf_path):
+            return send_file(
+                a.ocr_pdf_path,
+                mimetype="application/pdf",
+                as_attachment=True,
+                download_name=f"OCR-{a.filename or 'attachment.pdf'}"
+            )
+
+        # Otherwise serve the original. It may be encrypted (gmail sync) or plain (manual upload).
+        if a.stored_path and os.path.exists(a.stored_path):
+            try:
+                buf = decrypt_file_to_bytes(a.stored_path)
+                return send_file(io.BytesIO(buf), as_attachment=True,
+                                 download_name=a.filename or "attachment.pdf")
+            except InvalidToken:
+                # Not encrypted → stream the raw file
+                return send_file(a.stored_path, as_attachment=True,
+                                 download_name=a.filename or "attachment.pdf")
+            except Exception:
+                # Unexpected error → try raw file as a last resort
+                try:
+                    return send_file(a.stored_path, as_attachment=True,
+                                     download_name=a.filename or "attachment.pdf")
+                except Exception:
+                    app.logger.exception("Failed to stream attachment %s", att_id)
+
+        flash("File not found.")
+        return redirect(url_for("request_detail", req_id=a.foia_request_id))
     finally:
         db.close()
 
