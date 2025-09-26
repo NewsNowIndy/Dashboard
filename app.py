@@ -497,6 +497,7 @@ app.config["MAX_FORM_PARTS"] = 20000                       # lots of parts for m
 app.config["TRAP_BAD_REQUEST_ERRORS"] = True 
 init_db()
 
+HAS_TESSERACT = shutil.which("tesseract") is not None
 HAS_OCRMYPDF = bool(shutil.which("ocrmypdf"))
 
 ensure_webcap_columns(engine)
