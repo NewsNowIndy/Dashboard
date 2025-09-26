@@ -14,6 +14,7 @@ import tempfile
 import subprocess
 import csv
 import click
+import shutil
 from flask_login import LoginManager, login_required, current_user
 
 from config import Config
@@ -307,6 +308,84 @@ def _storyboard_attachment_maps(db, project):
         _storyboard_item_tips(db, project.id, item_ids),
         _storyboard_item_captures(db, project.id, item_ids),
     )
+
+def _link_attachment_to_project_document(db, att: FoiaAttachment, project: Project, ensure_text: bool = False) -> ProjectDocument:
+    if not _is_pdf_attachment(att):
+        raise ValueError("Attachment is not a PDF")
+
+    dest_dir = os.path.join(Config.PROJECTS_DIR, project.slug)
+    os.makedirs(dest_dir, exist_ok=True)
+
+    # Prefer the OCR’d file saved by the FOIA route
+    src_path = None
+    decrypted_bytes = None
+    if att.ocr_pdf_path and os.path.exists(att.ocr_pdf_path):
+        src_path = att.ocr_pdf_path
+    elif att.stored_path and os.path.exists(att.stored_path):
+        decrypted_bytes = decrypt_file_to_bytes(att.stored_path)
+    else:
+        raise FileNotFoundError("Attachment file not found")
+
+    base_name = secure_filename(att.filename or f"attachment-{att.id}.pdf")
+    if not base_name.lower().endswith(".pdf"):
+        base_name += ".pdf"
+
+    dest_path = os.path.join(dest_dir, base_name)
+    base, ext = os.path.splitext(base_name)
+    i = 1
+    while os.path.exists(dest_path):
+        dest_path = os.path.join(dest_dir, f"{base}-{i}{ext}")
+        i += 1
+
+    if src_path:
+        shutil.copyfile(src_path, dest_path)
+    else:
+        with open(dest_path, "wb") as fh:
+            fh.write(decrypted_bytes or b"")
+
+    # Optional: only run OCR again if explicitly requested
+    if ensure_text:
+        try:
+            pre_txt = extract_pdf_text(dest_path, ocr_fallback=False) or ""
+            if len(pre_txt.strip()) < 20:
+                fixed = make_searchable_pdf(dest_path, lang="eng")
+                if fixed and fixed != dest_path:
+                    os.replace(fixed, dest_path)
+        except Exception:
+            app.logger.exception("OCR ensure failed for %r", dest_path)
+
+    try:
+        size = os.path.getsize(dest_path)
+    except Exception:
+        size = 0
+
+    doc = ProjectDocument(
+        project_slug=project.slug,
+        title=base_name,
+        filename=os.path.basename(dest_path),
+        stored_path=dest_path,
+        mime_type="application/pdf",
+        size=size
+    )
+    db.add(doc)
+    db.flush()
+
+    # Index into FTS
+    try:
+        body = extract_pdf_text(dest_path) or ""
+    except Exception:
+        app.logger.exception("extract_pdf_text failed for doc_id=%s", doc.id)
+        body = ""
+    try:
+        db.execute(text("DELETE FROM doc_fts WHERE doc_id = :id"), {"id": doc.id})
+        db.execute(text("""
+            INSERT INTO doc_fts (doc_id, title, body)
+            VALUES (:id, :title, :body)
+        """), {"id": doc.id, "title": (doc.title or doc.filename or "Untitled"), "body": body})
+    except Exception:
+        app.logger.exception("FTS upsert failed for doc_id=%s", doc.id)
+
+    return doc
 
 ensure_storyboard_tables(engine)
 
@@ -1229,6 +1308,58 @@ def request_attachment_upload(req_id: int):
         return redirect(url_for("request_detail", req_id=req_id))
     finally:
         db.close()
+
+@app.post("/requests/<int:req_id>/attachments/<int:att_id>/link")
+@login_required
+def link_attachment_to_project(req_id: int, att_id: int):
+    db = SessionLocal()
+    pending_event = None
+    try:
+        r = db.get(FoiaRequest, req_id)
+        if not r:
+            flash("Request not found.", "warning")
+            return redirect(url_for("home"))
+
+        if not r.project_id:
+            flash("Attach this FOIA to a project first.", "warning")
+            return redirect(url_for("request_detail", req_id=req_id))
+
+        a = db.get(FoiaAttachment, att_id)
+        if not a or a.foia_request_id != r.id:
+            flash("Attachment not found for this request.", "warning")
+            return redirect(url_for("request_detail", req_id=req_id))
+
+        if not _is_pdf_attachment(a):
+            flash("Only PDF attachments can be linked.", "warning")
+            return redirect(url_for("request_detail", req_id=req_id))
+
+        project = db.get(Project, r.project_id)
+        if not project:
+            flash("Project not found.", "warning")
+            return redirect(url_for("request_detail", req_id=req_id))
+
+        # Copy the OCR’d file if present (no new OCR here)
+        doc = _link_attachment_to_project_document(db, a, project, ensure_text=False)
+
+        db.commit()
+
+        pending_event = ("document.uploaded", {"doc_id": doc.id, "project_id": project.id})
+        flash(f"Linked '{a.filename or 'attachment.pdf'}' to project '{project.name}'.", "success")
+        return redirect(url_for("request_detail", req_id=req_id))
+
+    except Exception as e:
+        db.rollback()
+        app.logger.exception("Error linking attachment to project")
+        flash(f"Link failed: {e}", "danger")
+        return redirect(url_for("request_detail", req_id=req_id))
+    finally:
+        db.close()
+        if pending_event:
+            try:
+                name, payload = pending_event
+                emit(name, **payload)
+            except Exception:
+                app.logger.exception("emit(%s) failed payload=%r", name, payload)
 
 # -----------------------------
 # FOIA: Attachments (encrypted + OCR copy)
