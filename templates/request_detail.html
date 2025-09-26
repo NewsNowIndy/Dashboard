@@ -319,14 +319,29 @@
       {% if pdf_attachments and pdf_attachments|length %}
         <ul class="mb-4">
           {% for a in pdf_attachments %}
-            <li class="mb-1">
+            <li class="mb-2">
               {{ a.filename or 'attachment.pdf' }} ({{ a.size or 0 }} bytes)
+
               {% if a.ocr_pdf_path %}
-                <a class="btn btn-sm btn-outline-info ms-2" href="{{ url_for('download_ocr', att_id=a.id) }}">Download OCR PDF</a>
+                <a class="btn btn-sm btn-outline-info ms-2"
+                  href="{{ url_for('download_ocr', att_id=a.id) }}">Download OCR PDF</a>
               {% endif %}
-              <a class="btn btn-sm btn-outline-light ms-1" href="{{ url_for('download_attachment', att_id=a.id) }}">
-                Download
-              </a>
+
+              <a class="btn btn-sm btn-outline-light ms-1"
+                href="{{ url_for('download_attachment', att_id=a.id) }}">Download</a>
+
+              {# Link into the FOIA's attached project #}
+              {% if r.project %}
+                <form method="post"
+                      action="{{ url_for('link_attachment_to_project', req_id=r.id, att_id=a.id) }}"
+                      class="d-inline ms-2">
+                  <button class="btn btn-sm btn-outline-success">Link</button>
+                  <small class="text-muted ms-1">→ {{ r.project.name }}</small>
+                </form>
+              {% else %}
+                <button class="btn btn-sm btn-outline-success ms-2" disabled>Link</button>
+                <small class="text-warning ms-1">attach this FOIA to a project first</small>
+              {% endif %}
             </li>
           {% endfor %}
         </ul>
