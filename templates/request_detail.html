@@ -190,7 +190,10 @@
         <!-- Follow-Ups Table -->
         {% set items = (r.followups or []) %}
         {% if items %}
-          {% set sorted_items = items|sort(attribute='fu_date', reverse=True) %}
+          {# Separate items with and without fu_date to avoid comparing date vs None #}
+          {% set items_with_date = items | selectattr('fu_date') | list %}
+          {% set items_without_date = items | rejectattr('fu_date') | list %}
+          {% set sorted_items = items_with_date | sort(attribute='fu_date', reverse=True) %}
           <div class="table-responsive">
             <table class="table table-sm table-dark align-middle mb-0">
               <thead>
